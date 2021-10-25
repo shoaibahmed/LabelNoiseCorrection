@@ -161,9 +161,9 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
 
-    # labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
-    # noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
-    # noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
+    labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
+    noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
+    noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
     
     if args.flood_test:
         assert args.reg_term == 0.
@@ -279,9 +279,10 @@ def main():
                 loss_per_epoch, acc_train_per_epoch_i, countTemp, k = train_mixUp_SoftHardBetaDouble(args, model, device, train_loader, optimizer, \
                                                                                                                 epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, \
                                                                                                                 countTemp, k, temp_length, args.reg_term, num_classes)
-        ### Training tracking loss
-        epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
-            track_training_loss(args, model, device, train_loader_track, epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
+        if args.Mixup != "None":
+            ### Training tracking loss
+            epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
+                track_training_loss(args, model, device, train_loader_track, epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
 
         # test
         loss_per_epoch, acc_val_per_epoch_i = test_cleaning(args, model, device, test_loader)
