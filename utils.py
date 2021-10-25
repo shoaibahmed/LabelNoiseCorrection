@@ -125,6 +125,7 @@ def track_training_loss(args, model, device, train_loader, epoch, bmm_model1, bm
            all_probs.data.numpy(), \
            all_argmaxXentropy.numpy(), \
            bmm_model, bmm_model_maxLoss, bmm_model_minLoss
+
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
@@ -162,6 +163,68 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch):
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
     return (loss_per_epoch, acc_train_per_epoch)
+
+##############################################################################
+
+########################### Cross-entropy loss ###############################
+def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoch, probes, loss_thresh):
+    criterion = nn.CrossEntropyLoss(reduction='none')
+    
+    model.train()
+    loss_per_batch = []
+    
+    example_idx = []
+    predictions = []
+    targets = []
+
+    acc_train_per_batch = []
+    correct = 0
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+
+        output = model(data)
+        # output = F.log_softmax(output, dim=1)
+        # loss = F.nll_loss(output, target)
+        loss = criterion(output, target)
+
+        if loss_thresh is not None:
+            with torch.no_grad():
+                flooding_level = loss.clone().detach()
+                flooding_level[loss < loss_thresh] = 0.  # Remove the flooding barrier if the loss is below the threshold
+            loss = (loss - flooding_level).abs() + flooding_level
+        assert loss.shape == (len(data),)
+        loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
+        
+        loss.backward()
+        optimizer.step()
+        loss_per_batch.append(loss.item())
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+        
+        predictions.append(output.argmax(dim=1).detach().cpu())
+        example_idx.append(ex_idx.clone().cpu())
+        targets.append(target.clone().cpu())
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    
+    example_idx = torch.cat(example_idx, dim=0)
+    predictions = torch.cat(predictions, dim=0)
+    targets = torch.cat(targets, dim=0)
+    
+    return (loss_per_epoch, acc_train_per_epoch), (example_idx, predictions, targets)
+
 
 ##############################################################################
 

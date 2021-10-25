@@ -1,6 +1,16 @@
 #!/bin/bash
 # Running things
 
+### CE loss
+python3 train.py --Mixup 'None' --experiment-name 'CE' --BootBeta None \
+	--epochs 300 --M 100 250 --noise-level 90 --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/
+
+### CE loss with flooding
+/opt/conda/bin/python train.py --Mixup 'None' --experiment-name 'CE-Flooding' --flood-test --BootBeta None \
+	--epochs 300 --M 100 250 --noise-level 90 --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/
+
+exit
+
 # ####### Joint Mixup and Bootstrapping #######
 
 python3 train.py --h

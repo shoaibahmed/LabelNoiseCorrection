@@ -17,8 +17,55 @@ import sys
 sys.path.append('../')
 from utils import *
 
+
+class CustomTensorDataset(torch.utils.data.Dataset):
+    def __init__(self, x: torch.Tensor, y: list) -> None:
+        self.x = x
+        self.y = y
+
+    def __getitem__(self, index):
+        return self.x[index], self.y[index]
+
+    def __len__(self):
+        return self.x.size(0)
+
+
+class IdxDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, dataset_probe_identity):
+        self.dataset = dataset
+        self.dataset_probe_identity = dataset_probe_identity
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        return self.dataset[idx], idx
+
+
+def test_tensor(model, data, target, msg=None):
+    assert torch.is_tensor(data) and torch.is_tensor(target)
+    criterion = nn.CrossEntropyLoss()
+    
+    model.eval()
+    with torch.no_grad():
+        output = model(data)
+        test_loss = float(criterion(output, target).mean())
+        pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+        correct = pred.eq(target.view_as(pred)).sum().item()
+        total = len(data)
+    
+    test_acc = 100. * correct / total
+    output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total)
+    
+    header = "Test set" if msg is None else msg
+    print(f"{header} | Average loss: {test_loss:.4f} | Accuracy: {correct}/{total} ({test_acc:.2f}%)")
+    
+    return output_dict
+
+
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
+
 
 def main():
     # Training settings
@@ -56,6 +103,8 @@ def main():
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
                         help="Parameter of the regularization term, default: 0.")
+    parser.add_argument('--flood-test', default=False, action='store_true', 
+                        help="Use flooding-based training")
 
 
     args = parser.parse_args()
@@ -63,7 +112,7 @@ def main():
     print(args)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
         torch.manual_seed(args.seed)  # CPU seed
@@ -112,9 +161,15 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
 
-    labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
-    noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
-    noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
+    # labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
+    # noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
+    # noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
+    
+    if args.flood_test:
+        assert args.reg_term == 0.
+        assert args.BootBeta == "None"
+        assert args.Mixup == "None"
+        print("Using flooding test...")
 
     # path where experiments are saved
     exp_path = os.path.join('./', 'noise_models_PreResNet18_{0}'.format(args.experiment_name), str(args.noise_level))
@@ -135,7 +190,36 @@ def main():
     countTemp = 1
 
     temp_length = 200 - bootstrap_ep_mixup
-
+    
+    probes = None
+    
+    threshold = 10
+    tolerance = 2
+    current_iter = 0
+    current_loss_thresh = None
+    
+    if args.flood_test:
+        probes = {}
+        tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
+        num_example_probes = 100
+        normalizer = transforms.Normalize(mean, std)
+        
+        probes["noisy"] = torch.clamp(torch.randn(num_example_probes, *tensor_shape), 0., 1.)
+        probes["noisy"] = normalizer(probes["noisy"]).to(device)
+        probes["noisy_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
+        
+        probe_images = torch.cat([probes["noisy"]], dim=0)
+        probe_labels = torch.cat([probes["noisy_labels"]], dim=0)
+        probe_dataset_standard = CustomTensorDataset(probe_images.to("cpu"), [int(x) for x in probe_labels.to("cpu").numpy().tolist()])
+        comb_trainset = torch.utils.data.ConcatDataset([trainset, probe_dataset_standard])
+        
+        probe_identity = ["noisy" for _ in range(len(probe_images))]
+        dataset_probe_identity = ["train" for i in range(len(trainset))] + probe_identity
+        assert len(dataset_probe_identity) == len(comb_trainset)
+        print("Probe dataset:", len(comb_trainset), comb_trainset[0][0].shape)
+        
+        idx_dataset = IdxDataset(comb_trainset, dataset_probe_identity)
+        idx_train_loader = torch.utils.data.DataLoader(idx_dataset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
 
     for epoch in range(1, args.epochs + 1):
         # train
@@ -143,8 +227,24 @@ def main():
 
         ### Standard CE training (without mixup) ###
         if args.Mixup == "None":
-            print('\t##### Doing standard training with cross-entropy loss #####')
-            loss_per_epoch, acc_train_per_epoch_i = train_CrossEntropy(args, model, device, train_loader, optimizer, epoch)
+            if args.flood_test:
+                print('\t##### Doing standard training with cross-entropy loss and flooding #####')
+                (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, probes, current_loss_thresh)
+                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+                
+                # Compute loss thresh
+                if current_loss_thresh is None:
+                    if float(noisy_stats["acc"]) > threshold:
+                        print(f"Noisy data accuracy ({noisy_stats['acc']}%) exceeded threshold ({threshold}%). Increasing tolerance counter...")
+                        current_iter += 1
+                        if current_iter >= tolerance:
+                            current_loss_thresh = noisy_stats["loss"] * 0.8  # 80% of the average loss on the noisy probes
+                            print(f"Enabling flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                    else:
+                        current_iter = 0
+            else:
+                print('\t##### Doing standard training with cross-entropy loss #####')
+                loss_per_epoch, acc_train_per_epoch_i = train_CrossEntropy(args, model, device, train_loader, optimizer, epoch)
 
         ### Mixup ###
         if args.Mixup == "Static":
