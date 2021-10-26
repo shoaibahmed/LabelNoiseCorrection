@@ -105,6 +105,8 @@ def main():
                         help="Parameter of the regularization term, default: 0.")
     parser.add_argument('--flood-test', default=False, action='store_true', 
                         help="Use flooding-based training")
+    parser.add_argument('--dynamic-flood-thresh', default=False, action='store_true', 
+                        help="Use dynamic flooding threshold during training")
 
 
     args = parser.parse_args()
@@ -165,6 +167,7 @@ def main():
     noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
     noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
     
+    assert not args.dynamic_flood_thresh or args.flood_test
     if args.flood_test:
         assert args.reg_term == 0.
         assert args.BootBeta == "None"
@@ -228,20 +231,24 @@ def main():
         ### Standard CE training (without mixup) ###
         if args.Mixup == "None":
             if args.flood_test:
-                print('\t##### Doing standard training with cross-entropy loss and flooding #####')
+                print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
                 (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, probes, current_loss_thresh)
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
                 
                 # Compute loss thresh
-                if current_loss_thresh is None:
-                    if float(noisy_stats["acc"]) > threshold:
-                        print(f"Noisy data accuracy ({noisy_stats['acc']}%) exceeded threshold ({threshold}%). Increasing tolerance counter...")
-                        current_iter += 1
-                        if current_iter >= tolerance:
-                            current_loss_thresh = noisy_stats["loss"] * 0.8  # 80% of the average loss on the noisy probes
-                            print(f"Enabling flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
-                    else:
-                        current_iter = 0
+                if args.dynamic_flood_thresh:
+                    current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                    print(f"Enabling dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                else:
+                    if current_loss_thresh is None:
+                        if float(noisy_stats["acc"]) > threshold:
+                            print(f"Noisy data accuracy ({noisy_stats['acc']}%) exceeded threshold ({threshold}%). Increasing tolerance counter...")
+                            current_iter += 1
+                            if current_iter >= tolerance:
+                                current_loss_thresh = noisy_stats["loss"] * 0.8  # 80% of the average loss on the noisy probes
+                                print(f"Enabling flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                        else:
+                            current_iter = 0
             else:
                 print('\t##### Doing standard training with cross-entropy loss #####')
                 loss_per_epoch, acc_train_per_epoch_i = train_CrossEntropy(args, model, device, train_loader, optimizer, epoch)
