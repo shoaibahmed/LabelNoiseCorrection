@@ -193,7 +193,7 @@ def main():
     
     probes = None
     
-    threshold = 10
+    threshold = 20
     tolerance = 2
     current_iter = 0
     current_loss_thresh = None
