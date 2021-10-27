@@ -73,7 +73,7 @@ plt.xlabel('Noise level (%)')
 plt.ylabel('Accuracy (%)')
 plt.title("Results on PreAct ResNet-18 trained on CIFAR-10")
 plt.legend()
-# plt.ylim(0., 100.)
+plt.ylim(0., 100.)
 # plt.xticks(list(range(1, 5)))
 plt.tight_layout()
 

@@ -200,14 +200,16 @@ def main():
     tolerance = 2
     current_iter = 0
     current_loss_thresh = None
+    threshold_test = True
     
     if args.flood_test:
         probes = {}
         tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
-        num_example_probes = 100
+        num_example_probes = 250  # 5% of the dataset
         normalizer = transforms.Normalize(mean, std)
         
-        probes["noisy"] = torch.clamp(torch.randn(num_example_probes, *tensor_shape), 0., 1.)
+        # probes["noisy"] = torch.clamp(torch.randn(num_example_probes, *tensor_shape), 0., 1.)
+        probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
         probes["noisy"] = normalizer(probes["noisy"]).to(device)
         probes["noisy_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
         
@@ -237,15 +239,30 @@ def main():
                 
                 # Compute loss thresh
                 if args.dynamic_flood_thresh:
-                    current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
-                    print(f"Enabling dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                    if threshold_test:
+                        if current_loss_thresh is None:
+                            if float(noisy_stats["acc"]) > threshold:
+                                print(f"Noisy data accuracy ({noisy_stats['acc']}%) exceeded threshold ({threshold}%). Increasing tolerance counter...")
+                                current_iter += 1
+                                if current_iter >= tolerance:
+                                    current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                                    print(f"Enabling dynamic flooding barrier for the first time. Flooding loss threshold selected to be: {current_loss_thresh}")
+                            else:
+                                current_iter = 0
+                        else:
+                            current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                            print(f"Using dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                    else:
+                        current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                        print(f"Enabling dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
                 else:
                     if current_loss_thresh is None:
                         if float(noisy_stats["acc"]) > threshold:
                             print(f"Noisy data accuracy ({noisy_stats['acc']}%) exceeded threshold ({threshold}%). Increasing tolerance counter...")
                             current_iter += 1
                             if current_iter >= tolerance:
-                                current_loss_thresh = noisy_stats["loss"] * 0.8  # 80% of the average loss on the noisy probes
+                                # current_loss_thresh = noisy_stats["loss"] * 0.8  # 80% of the average loss on the noisy probes
+                                current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
                                 print(f"Enabling flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
                         else:
                             current_iter = 0
