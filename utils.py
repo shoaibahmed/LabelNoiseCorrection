@@ -168,7 +168,8 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch):
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
-def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoch, probes, loss_thresh):
+def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoch, loss_thresh, use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False):
+    assert not stop_learning or use_ex_weights
     criterion = nn.CrossEntropyLoss(reduction='none')
     
     model.train()
@@ -189,13 +190,24 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
         # loss = F.nll_loss(output, target)
         loss = criterion(output, target)
 
+        ex_weights = torch.ones_like(loss) / len(loss)  # Equal weight for averaging
         if loss_thresh is not None:
-            with torch.no_grad():
-                flooding_level = loss.clone().detach()
-                flooding_level[loss < loss_thresh] = 0.  # Remove the flooding barrier if the loss is below the threshold
-            loss = (loss - flooding_level).abs() + flooding_level
+            if stop_learning:
+                ex_weights[loss >= loss_thresh] = 0.  # Don't train on these examples
+            else:
+                with torch.no_grad():
+                    if use_thresh_as_flood:
+                        flooding_level = torch.empty_like(loss).fill_(loss_thresh)
+                    else:
+                        flooding_level = loss.clone().detach()
+                    flooding_level[loss < loss_thresh] = 0.  # Remove the flooding barrier if the loss is below the threshold
+                    ex_weights[loss >= loss_thresh] = ex_weights[loss >= loss_thresh] * 0.1  # Reduced weight for examples which are flooded
+                loss = (loss - flooding_level).abs() + flooding_level
         assert loss.shape == (len(data),)
-        loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
+        if use_ex_weights:
+            loss = (loss * ex_weights).sum()
+        else:
+            loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
         
         loss.backward()
         optimizer.step()

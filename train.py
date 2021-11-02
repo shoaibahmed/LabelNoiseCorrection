@@ -234,7 +234,7 @@ def main():
         if args.Mixup == "None":
             if args.flood_test:
                 print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
-                (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, probes, current_loss_thresh)
+                (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh)
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
                 
                 # Compute loss thresh

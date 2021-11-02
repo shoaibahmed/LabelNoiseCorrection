@@ -4,11 +4,13 @@ from natsort import natsorted
 from glob import glob
 import matplotlib.pyplot as plt
 
-if len(sys.argv) != 2:
-    print(f"Usage: {sys.argv[0]} <Model directoroes>")
+if len(sys.argv) != 3:
+    print(f"Usage: {sys.argv[0]} <Model directories> <Output file name>")
     exit()
 model_dirs = sys.argv[1].split(";")
 assert len(model_dirs) >= 1
+output_file = sys.argv[2]
+assert output_file.endswith(".png")
 
 all_results = {}
 for model_dir in model_dirs:
@@ -43,9 +45,29 @@ for model_dir in model_dirs:
     all_results[dir_name] = results
 print(all_results)
 
+# Add other baseline results
+results_cifar10 = {"CIFAR10-Reed-2015": {0.0: (94.6, 94.7), 20.0: (82.9, 86.8), 50.0: (58.4, 79.8), 80.0: (26.8, 63.3), 90.0: (17.0, 42.9)},
+                   "CIFAR10-Patrini-2017": {0.0: (94.6, 94.7), 20.0: (83.1, 86.8), 50.0: (59.4, 79.8), 80.0: (26.2, 63.3), 90.0: (18.8, 42.9)},
+                   "CIFAR10-Zhang-2018": {0.0: (95.2, 95.3), 20.0: (92.3, 95.6), 50.0: (77.6, 87.1), 80.0: (46.7, 71.6), 90.0: (43.9, 52.2)},
+                   "CIFAR10-Arazo-MH-2019": {0.0: (93.4, 93.6), 20.0: (93.8, 94.0), 50.0: (91.9, 92.0), 80.0: (86.6, 86.8), 90.0: (9.9, 40.8)},
+                   "CIFAR10-Arazo-MDSH-2019": {0.0: (92.7, 93.6), 20.0: (93.6, 93.8), 50.0: (90.3, 90.6), 80.0: (77.8, 82.4), 90.0: (68.7, 69.1)}}
+results_cifar100 = {}
+
 model_types = list(all_results.keys())
 noise_levels = natsorted(list(all_results[model_types[0]].keys()))
 print("Noise levels:", noise_levels)
+
+is_cifar100 = 'cifar100' in model_types[0].lower()
+include_baseline_results = True
+plot_end_acc = False
+
+if include_baseline_results:
+    if is_cifar100:
+        all_results.update(results_cifar100)
+    else:
+        all_results.update(results_cifar10)
+    model_types = list(all_results.keys())
+print("All model names:", model_types)
 
 fig, ax = plt.subplots()
 fig.set_size_inches(8, 5)
@@ -57,27 +79,32 @@ NUM_COLORS = len(model_types)
 marker_colors = [cm(1.*i/NUM_COLORS) for i in range(NUM_COLORS)]
 
 for idx in range(len(model_types)):
-    for plot_best in [False, True]:
+    for plot_best in [False, True] if plot_end_acc else [True]:
         model_results = all_results[model_types[idx]]
         acc_list = []
+        noise_list = []
         for noise_level in noise_levels:
+            if noise_level not in model_results:
+                print(f"Warning: Noise level ({noise_level}) results not found for model: {model_types[idx]}")
+                continue
             acc_list.append(model_results[noise_level][1 if plot_best else 0])
+            noise_list.append(noise_level)
         
-        line = plt.plot(noise_levels, acc_list, linewidth=2., marker=marker_list[idx % len(marker_list)],
-                        color=marker_colors[idx], alpha=0.75, markeredgecolor='k', label=f"{model_types[idx]}{' (Best)' if plot_best else ''}")
+        line = plt.plot(noise_list, acc_list, linewidth=2., marker=marker_list[idx % len(marker_list)],
+                        color=marker_colors[idx], alpha=0.75, markeredgecolor='k', label=f"{model_types[idx]}{' (Best)' if plot_best and plot_end_acc else ''}")
         line[0].set_color(marker_colors[idx])
         # line[0].set_linestyle(line_styles[(idx*2+(1 if plot_best else 0)) % len(line_styles)])
         line[0].set_linestyle(line_styles[(1 if plot_best else 0) % len(line_styles)])
 
 plt.xlabel('Noise level (%)')
 plt.ylabel('Accuracy (%)')
-plt.title("Results on PreAct ResNet-18 trained on CIFAR-10")
+plt.title(f"Results on PreAct ResNet-18 trained on CIFAR-10{'0' if is_cifar100 else ''}{' (Best)' if not plot_end_acc else ''}")
 plt.legend()
 plt.ylim(0., 100.)
 # plt.xticks(list(range(1, 5)))
 plt.tight_layout()
 
-output_file = "results.png"
+# output_file = "results.png"
 if output_file is not None:
     plt.savefig(output_file, dpi=300)
 plt.show()
