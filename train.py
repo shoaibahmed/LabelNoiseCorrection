@@ -95,7 +95,7 @@ def main():
     parser.add_argument('--alpha', type=float, default=32, help='alpha parameter for the mixup distribution, default: 32')
     parser.add_argument('--M', nargs='+', type=int, default=[100, 250],
                         help="Milestones for the LR sheduler, default 100 250")
-    parser.add_argument('--Mixup', type=str, default='None', choices=['None', 'Static', 'Dynamic'],
+    parser.add_argument('--Mixup', type=str, default='None', choices=['None', 'Static', 'Dynamic', 'Flooding'],
                         help="Type of bootstrapping. Available: 'None' (deactivated)(default), \
                                 'Static' (as in the paper), 'Dynamic' (BMM to mix the smaples, will use decreasing softmax), default: None")
     parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'Soft'],
@@ -171,7 +171,7 @@ def main():
     if args.flood_test:
         assert args.reg_term == 0.
         assert args.BootBeta == "None"
-        assert args.Mixup == "None"
+        assert args.Mixup in ["None", "Flooding"]
         print("Using flooding test...")
 
     # path where experiments are saved
@@ -205,7 +205,7 @@ def main():
     if args.flood_test:
         probes = {}
         tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
-        num_example_probes = 250  # 5% of the dataset
+        num_example_probes = 250  # 0.5% of the dataset
         normalizer = transforms.Normalize(mean, std)
         
         # probes["noisy"] = torch.clamp(torch.randn(num_example_probes, *tensor_shape), 0., 1.)
@@ -231,10 +231,15 @@ def main():
         scheduler.step()
 
         ### Standard CE training (without mixup) ###
-        if args.Mixup == "None":
+        if args.Mixup in ["None", "Flooding"]:
             if args.flood_test:
-                print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
-                (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh)
+                if args.Mixup == "Flooding":
+                    alpha = 32
+                    print(f"\t##### Doing standard training with mix-up (alpha={alpha}) loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
+                    (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_mixUp_probes(args, model, device, idx_train_loader, optimizer, epoch, alpha, current_loss_thresh)
+                else:
+                    print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
+                    (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh)
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
                 
                 # Compute loss thresh

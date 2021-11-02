@@ -303,6 +303,83 @@ def train_mixUp(args, model, device, train_loader, optimizer, epoch, alpha):
 
 ##############################################################################
 
+############################# Mixup with probes #################################
+def train_mixUp_probes(args, model, device, train_loader, optimizer, epoch, alpha, loss_thresh, use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False):
+    assert not stop_learning or use_ex_weights
+    criterion = nn.CrossEntropyLoss(reduction='none')
+    
+    model.train()
+    loss_per_batch = []
+    
+    example_idx = []
+    predictions = []
+    targets = []
+
+    acc_train_per_batch = []
+    correct = 0
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+
+        inputs, targets_a, targets_b, lam = mixup_data(data, target, alpha, device)
+
+        # output = model(inputs)
+        # output = F.log_softmax(output, dim=1)
+        # loss = mixup_criterion(output, targets_a, targets_b, lam)
+        
+        output = model(data)
+        loss = lam * criterion(output, targets_a) + (1 - lam) * criterion(output, targets_b)
+
+        ex_weights = torch.ones_like(loss) / len(loss)  # Equal weight for averaging
+        if loss_thresh is not None:
+            if stop_learning:
+                ex_weights[loss >= loss_thresh] = 0.  # Don't train on these examples
+            else:
+                with torch.no_grad():
+                    if use_thresh_as_flood:
+                        flooding_level = torch.empty_like(loss).fill_(loss_thresh)
+                    else:
+                        flooding_level = loss.clone().detach()
+                    flooding_level[loss < loss_thresh] = 0.  # Remove the flooding barrier if the loss is below the threshold
+                    ex_weights[loss >= loss_thresh] = ex_weights[loss >= loss_thresh] * 0.1  # Reduced weight for examples which are flooded
+                loss = (loss - flooding_level).abs() + flooding_level
+        assert loss.shape == (len(data),)
+        if use_ex_weights:
+            loss = (loss * ex_weights).sum()
+        else:
+            loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
+        
+        loss.backward()
+        optimizer.step()
+        loss_per_batch.append(loss.item())
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+        
+        predictions.append(output.argmax(dim=1).detach().cpu())
+        example_idx.append(ex_idx.clone().cpu())
+        targets.append(target.clone().cpu())
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    
+    example_idx = torch.cat(example_idx, dim=0)
+    predictions = torch.cat(predictions, dim=0)
+    targets = torch.cat(targets, dim=0)
+    
+    return (loss_per_epoch, acc_train_per_epoch), (example_idx, predictions, targets)
+
+##############################################################################
+
 ########################## Mixup + Dynamic Hard Bootstrapping ##################################
 # Mixup with hard bootstrapping using the beta model
 def reg_loss_class(mean_tab,num_classes=10):
