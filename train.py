@@ -201,6 +201,7 @@ def main():
     current_iter = 0
     current_loss_thresh = None
     threshold_test = True
+    mixup_only_when_flooding = True
     
     if args.flood_test:
         probes = {}
@@ -235,8 +236,9 @@ def main():
             if args.flood_test:
                 if args.Mixup == "Flooding":
                     alpha = 32
-                    print(f"\t##### Doing standard training with mix-up (alpha={alpha}) loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
-                    (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_mixUp_probes(args, model, device, idx_train_loader, optimizer, epoch, alpha, current_loss_thresh)
+                    mixup_alpha = (1. / alpha) if current_loss_thresh is None and mixup_only_when_flooding else alpha
+                    print(f"\t##### Doing standard training with mix-up (alpha={mixup_alpha}) loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
+                    (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_mixUp_probes(args, model, device, idx_train_loader, optimizer, epoch, mixup_alpha, current_loss_thresh)
                 else:
                     print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
                     (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh)
