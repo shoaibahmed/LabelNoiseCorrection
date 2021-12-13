@@ -167,6 +167,9 @@ def main():
     noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
     noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
     
+    misclassified_instances = labels != noisy_labels
+    print(f"Percentage of changed instances: {np.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({np.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
+    
     assert not args.dynamic_flood_thresh or args.flood_test
     if args.flood_test:
         assert args.reg_term == 0.
@@ -219,18 +222,25 @@ def main():
         probe_dataset_standard = CustomTensorDataset(probe_images.to("cpu"), [int(x) for x in probe_labels.to("cpu").numpy().tolist()])
         comb_trainset = torch.utils.data.ConcatDataset([trainset, probe_dataset_standard])
         
-        probe_identity = ["noisy" for _ in range(len(probe_images))]
-        dataset_probe_identity = ["train" for i in range(len(trainset))] + probe_identity
+        probe_identity = ["noisy_probe" for _ in range(len(probe_images))]
+        dataset_probe_identity = ["train_noisy" if misclassified_instances[i] else "train_clean" for i in range(len(trainset))] + probe_identity
         assert len(dataset_probe_identity) == len(comb_trainset)
         print("Probe dataset:", len(comb_trainset), comb_trainset[0][0].shape)
         
         idx_dataset = IdxDataset(comb_trainset, dataset_probe_identity)
         idx_train_loader = torch.utils.data.DataLoader(idx_dataset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+        
+        total_instances = len(idx_dataset)
+        noisy_probe_instances = np.sum([1 if dataset_probe_identity[i] == "noisy_probe" else 0 for i in range(len(idx_dataset))])
+        noisy_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_noisy" else 0 for i in range(len(idx_dataset))])
+        clean_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_clean" else 0 for i in range(len(idx_dataset))])
+        print(f"Total instances: {total_instances} / Noisy probe instances: {noisy_probe_instances} / Noisy train instances: {noisy_train_instances} / Clean train instances: {clean_train_instances}")
 
+    test_detection_performance = True
     for epoch in range(1, args.epochs + 1):
         # train
         scheduler.step()
-
+        
         ### Standard CE training (without mixup) ###
         if args.Mixup in ["None", "Flooding"]:
             if args.flood_test:
@@ -346,6 +356,46 @@ def main():
                 epoch, loss_per_epoch[-1], acc_val_per_epoch_i[-1], args.noise_level, best_acc_val)
             torch.save(model.state_dict(), os.path.join(exp_path, snapLast + '.pth'))
             torch.save(optimizer.state_dict(), os.path.join(exp_path, 'opt_' + snapLast + '.pth'))
+        
+        if test_detection_performance:
+            model.eval()
+            noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+            current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+            
+            # TODO: Compare detection performance here
+            tp, fp, tn, fn = 0, 0, 0, 0
+            criterion = nn.CrossEntropyLoss(reduction='none')
+            
+            for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+                data, target = data.to(device), target.to(device)
+                with torch.no_grad():
+                    output = model(data)
+                    loss = criterion(output, target)
+                is_misclassified_instance_probe = loss >= current_loss_thresh
+                for i in range(len(is_misclassified_instance_probe)):
+                    ex_dataset_idx = ex_idx[i]
+                    is_predicted_noisy = is_misclassified_instance_probe[i]
+                    if dataset_probe_identity[ex_dataset_idx] == "noisy_probe":
+                        pass
+                    elif dataset_probe_identity[ex_dataset_idx] == "train_noisy":
+                        if is_predicted_noisy:
+                            tp += 1
+                        else:
+                            fn += 1
+                    else:
+                        assert dataset_probe_identity[ex_dataset_idx] == "train_clean"
+                        if is_predicted_noisy:
+                            fp += 1
+                        else:
+                            tn += 1
+            
+            detection_precision = 100. * float(tp) / (tp + fp)
+            detection_recall = 100. * float(tp) / (tp + fn)
+            detection_fscore = (2 * detection_precision * detection_recall) / (detection_precision + detection_recall)
+            print(f"TP: {tp} / FP: {fp} / TN: {tn} / FN: {fn}")
+            print(f"Precision: {detection_precision:.2f}% / Recall: {detection_recall:.2f}% / F-Measure: {detection_fscore:.2f}")
+            
+            model.train()
 
 
 if __name__ == '__main__':
