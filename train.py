@@ -14,6 +14,7 @@ import os
 import numpy as np
 import pickle
 from matplotlib import pyplot as plt
+from sklearn.metrics import auc
 import sys
 sys.path.append('../')
 from utils import *
@@ -399,8 +400,14 @@ def main():
                         else:
                             assert dataset_probe_identity[ex_dataset_idx] == "noisy_probe"
                 
-                detection_precision = 100. * float(tp) / (tp + fp)
-                detection_recall = 100. * float(tp) / (tp + fn)
+                if tp + fp == 0:
+                    detection_precision = 100.
+                else:
+                    detection_precision = 100. * float(tp) / (tp + fp)
+                if tp + fn == 0:
+                    detection_recall = 100.
+                else:
+                    detection_recall = 100. * float(tp) / (tp + fn)
                 detection_fscore = (2 * detection_precision * detection_recall) / (detection_precision + detection_recall)
                 print(f"Detector: {detector.upper()} / TP: {tp} / FP: {fp} / TN: {tn} / FN: {fn}")
                 print(f"Precision: {detection_precision:.2f}% / Recall: {detection_recall:.2f}% / F-Measure: {detection_fscore:.2f}")
@@ -417,11 +424,11 @@ def main():
         stats_dict = {"probes": probe_detection_list, "bmm": bmm_detection_list}
         pickle.dump(stats_dict, f)
     
-    line_styles = ["solid", "dashed", "dashdor", "dotted"]
-    marker_list = ["o", "*", "X", "P", "D", "v", "^", "h", "1", "2", "3", "4"]
-    cm = plt.get_cmap("rainbow")
-    num_colors = 8
-    marker_colors = [cm(1.*i/num_colors) for i in range(num_colors)]
+    # line_styles = ["solid", "dashed", "dashdor", "dotted"]
+    # marker_list = ["o", "*", "X", "P", "D", "v", "^", "h", "1", "2", "3", "4"]
+    # cm = plt.get_cmap("rainbow")
+    # num_colors = 8
+    # marker_colors = [cm(1.*i/num_colors) for i in range(num_colors)]
     
     plt.figure(figsize=(15, 8))
     # for i in range(len(probe_detection_list)):
@@ -440,7 +447,24 @@ def main():
     plt.ylabel("Percentage")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(exp_path, "detection_results_.png"), dpi=300)
+    plt.savefig(os.path.join(exp_path, "detection_results.png"), dpi=300)
+    
+    with open(os.path.join(exp_path, "stats.csv")) as f:
+        f.write(f"Epoch,Probe Precision,Probe Recall,Probe F-Score,BMM Precision,BMM Recall,BMM F-Score\n")
+        for epoch in range(len(probe_detection_list)):
+            probe_s = probe_detection_list[epoch]
+            bmm_s = bmm_detection_list[epoch]
+            f.write(f"{epoch},{probe_s[0]},{probe_s[1]},{probe_s[2]},{bmm_s[0]},{bmm_s[1]},{bmm_s[2]}\n")
+        
+        auc_probe_p = auc([x[0] for x in probe_detection_list])
+        auc_probe_r = auc([x[1] for x in probe_detection_list])
+        auc_probe_f = auc([x[2] for x in probe_detection_list])
+        
+        auc_bmm_p = auc([x[0] for x in bmm_detection_list])
+        auc_bmm_r = auc([x[1] for x in bmm_detection_list])
+        auc_bmm_f = auc([x[2] for x in bmm_detection_list])
+        
+        f.write(f"-1,{auc_probe_p},{auc_probe_r},{auc_probe_f},{auc_bmm_p},{auc_bmm_r},{auc_bmm_f}\n")
 
 
 if __name__ == '__main__':
