@@ -168,8 +168,9 @@ def main():
     noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
     noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
     
+    noisy_labels = torch.Tensor(noisy_labels)
     misclassified_instances = labels != noisy_labels
-    print(f"Percentage of changed instances: {np.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({np.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
+    print(f"Percentage of changed instances: {torch.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({torch.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
     
     assert not args.dynamic_flood_thresh or args.flood_test
     if args.flood_test:
@@ -370,7 +371,7 @@ def main():
             
             for detector in ["probe", "bmm"]:
                 tp, fp, tn, fn = 0, 0, 0, 0
-                for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+                for batch_idx, ((data, target), ex_idx) in enumerate(idx_train_loader):
                     data, target = data.to(device), target.to(device)
                     if detector == "probe":
                         with torch.no_grad():
@@ -412,7 +413,7 @@ def main():
             model.train()
     
     assert len(probe_detection_list) == len(bmm_detection_list)
-    with open("stats.pkl", "wb") as f:
+    with open(os.path.join(exp_path, "stats.pkl"), "wb") as f:
         stats_dict = {"probes": probe_detection_list, "bmm": bmm_detection_list}
         pickle.dump(stats_dict, f)
     
@@ -439,7 +440,7 @@ def main():
     plt.ylabel("Percentage")
     plt.legend()
     plt.tight_layout()
-    plt.savefig("detection_results.png", dpi=300)
+    plt.savefig(os.path.join(exp_path, "detection_results_.png"), dpi=300)
 
 
 if __name__ == '__main__':
