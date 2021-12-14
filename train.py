@@ -12,6 +12,7 @@ import torchvision.models as models
 import random
 import os
 import numpy as np
+import pickle
 from matplotlib import pyplot as plt
 import sys
 sys.path.append('../')
@@ -204,9 +205,10 @@ def main():
     current_iter = 0
     current_loss_thresh = None
     threshold_test = True
-    mixup_only_when_flooding = True
+    mixup_only_when_flooding = False
+    test_detection_performance = True
     
-    if args.flood_test:
+    if args.flood_test or test_detection_performance:
         probes = {}
         tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
         num_example_probes = 250  # 0.5% of the dataset
@@ -236,7 +238,9 @@ def main():
         clean_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_clean" else 0 for i in range(len(idx_dataset))])
         print(f"Total instances: {total_instances} / Noisy probe instances: {noisy_probe_instances} / Noisy train instances: {noisy_train_instances} / Clean train instances: {clean_train_instances}")
 
-    test_detection_performance = True
+    probe_detection_list = []
+    bmm_detection_list = []
+
     for epoch in range(1, args.epochs + 1):
         # train
         scheduler.step()
@@ -320,7 +324,7 @@ def main():
                 loss_per_epoch, acc_train_per_epoch_i, countTemp, k = train_mixUp_SoftHardBetaDouble(args, model, device, train_loader, optimizer, \
                                                                                                                 epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, \
                                                                                                                 countTemp, k, temp_length, args.reg_term, num_classes)
-        if args.Mixup != "None":
+        if args.Mixup != "None" or test_detection_performance:
             ### Training tracking loss
             epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
                 track_training_loss(args, model, device, train_loader_track, epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
@@ -359,43 +363,83 @@ def main():
         
         if test_detection_performance:
             model.eval()
+            
             noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
             current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
-            
-            # TODO: Compare detection performance here
-            tp, fp, tn, fn = 0, 0, 0, 0
             criterion = nn.CrossEntropyLoss(reduction='none')
             
-            for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
-                data, target = data.to(device), target.to(device)
-                with torch.no_grad():
-                    output = model(data)
-                    loss = criterion(output, target)
-                is_misclassified_instance_probe = loss >= current_loss_thresh
-                for i in range(len(is_misclassified_instance_probe)):
-                    ex_dataset_idx = ex_idx[i]
-                    is_predicted_noisy = is_misclassified_instance_probe[i]
-                    if dataset_probe_identity[ex_dataset_idx] == "noisy_probe":
-                        pass
-                    elif dataset_probe_identity[ex_dataset_idx] == "train_noisy":
-                        if is_predicted_noisy:
-                            tp += 1
-                        else:
-                            fn += 1
+            for detector in ["probe", "bmm"]:
+                tp, fp, tn, fn = 0, 0, 0, 0
+                for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+                    data, target = data.to(device), target.to(device)
+                    if detector == "probe":
+                        with torch.no_grad():
+                            output = model(data)
+                            loss = criterion(output, target)
+                            is_misclassified_instance_probe = loss >= current_loss_thresh
                     else:
-                        assert dataset_probe_identity[ex_dataset_idx] == "train_clean"
-                        if is_predicted_noisy:
-                            fp += 1
+                        noisy_prob = compute_probabilities_batch(data, target, model, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
+                        noisy_prob = noisy_prob.to(device)
+                        is_misclassified_instance_probe = noisy_prob >= 0.5  # Using 0.5 as the threshold
+                    
+                    for i in range(len(is_misclassified_instance_probe)):
+                        ex_dataset_idx = ex_idx[i]
+                        is_predicted_noisy = is_misclassified_instance_probe[i]
+                        if dataset_probe_identity[ex_dataset_idx] == "train_noisy":
+                            if is_predicted_noisy:
+                                tp += 1
+                            else:
+                                fn += 1
+                        elif dataset_probe_identity[ex_dataset_idx] == "train_clean":
+                            if is_predicted_noisy:
+                                fp += 1
+                            else:
+                                tn += 1
                         else:
-                            tn += 1
-            
-            detection_precision = 100. * float(tp) / (tp + fp)
-            detection_recall = 100. * float(tp) / (tp + fn)
-            detection_fscore = (2 * detection_precision * detection_recall) / (detection_precision + detection_recall)
-            print(f"TP: {tp} / FP: {fp} / TN: {tn} / FN: {fn}")
-            print(f"Precision: {detection_precision:.2f}% / Recall: {detection_recall:.2f}% / F-Measure: {detection_fscore:.2f}")
+                            assert dataset_probe_identity[ex_dataset_idx] == "noisy_probe"
+                
+                detection_precision = 100. * float(tp) / (tp + fp)
+                detection_recall = 100. * float(tp) / (tp + fn)
+                detection_fscore = (2 * detection_precision * detection_recall) / (detection_precision + detection_recall)
+                print(f"Detector: {detector.upper()} / TP: {tp} / FP: {fp} / TN: {tn} / FN: {fn}")
+                print(f"Precision: {detection_precision:.2f}% / Recall: {detection_recall:.2f}% / F-Measure: {detection_fscore:.2f}")
+                if detector == "probe":
+                    probe_detection_list.append((detection_precision, detection_recall, detection_fscore))
+                else:
+                    assert detector == "bmm"
+                    bmm_detection_list.append((detection_precision, detection_recall, detection_fscore))
             
             model.train()
+    
+    assert len(probe_detection_list) == len(bmm_detection_list)
+    with open("stats.pkl", "wb") as f:
+        stats_dict = {"probes": probe_detection_list, "bmm": bmm_detection_list}
+        pickle.dump(stats_dict, f)
+    
+    line_styles = ["solid", "dashed", "dashdor", "dotted"]
+    marker_list = ["o", "*", "X", "P", "D", "v", "^", "h", "1", "2", "3", "4"]
+    cm = plt.get_cmap("rainbow")
+    num_colors = 8
+    marker_colors = [cm(1.*i/num_colors) for i in range(num_colors)]
+    
+    plt.figure(figsize=(15, 8))
+    # for i in range(len(probe_detection_list)):
+    #     prec_probe, recall_probe, fscore_probe = probe_detection_list[i]
+    #     prec_bmm, recall_bmm, fscore_bmm = bmm_detection_list[i]
+    x_axis = list(range(1, len(probe_detection_list)+1))
+    plt.plot(x_axis, [x[0] for x in probe_detection_list], label="Precision (Probes)")
+    plt.plot(x_axis, [x[1] for x in probe_detection_list], label="Recall (Probes)")
+    plt.plot(x_axis, [x[2] for x in probe_detection_list], label="F-Measure (Probes)")
+    
+    plt.plot(x_axis, [x[0] for x in bmm_detection_list], label="Precision (BMM)")
+    plt.plot(x_axis, [x[1] for x in bmm_detection_list], label="Recall (BMM)")
+    plt.plot(x_axis, [x[2] for x in bmm_detection_list], label="F-Measure (BMM)")
+    
+    plt.xlabel("Epochs")
+    plt.ylabel("Percentage")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("detection_results.png", dpi=300)
 
 
 if __name__ == '__main__':
