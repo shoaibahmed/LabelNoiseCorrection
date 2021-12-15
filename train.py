@@ -408,7 +408,10 @@ def main():
                     detection_recall = 100.
                 else:
                     detection_recall = 100. * float(tp) / (tp + fn)
-                detection_fscore = (2 * detection_precision * detection_recall) / (detection_precision + detection_recall)
+                if detection_precision + detection_recall == 0.:
+                    detection_fscore = 0.
+                else:
+                    detection_fscore = (2 * detection_precision * detection_recall) / (detection_precision + detection_recall)
                 print(f"Detector: {detector.upper()} / TP: {tp} / FP: {fp} / TN: {tn} / FN: {fn}")
                 print(f"Precision: {detection_precision:.2f}% / Recall: {detection_recall:.2f}% / F-Measure: {detection_fscore:.2f}")
                 if detector == "probe":
@@ -449,7 +452,7 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(exp_path, "detection_results.png"), dpi=300)
     
-    with open(os.path.join(exp_path, "stats.csv")) as f:
+    with open(os.path.join(exp_path, "stats.csv"), "w") as f:
         f.write(f"Epoch,Probe Precision,Probe Recall,Probe F-Score,BMM Precision,BMM Recall,BMM F-Score\n")
         for epoch in range(len(probe_detection_list)):
             probe_s = probe_detection_list[epoch]
