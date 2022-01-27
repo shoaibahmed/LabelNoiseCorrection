@@ -459,13 +459,14 @@ def main():
             bmm_s = bmm_detection_list[epoch]
             f.write(f"{epoch},{probe_s[0]},{probe_s[1]},{probe_s[2]},{bmm_s[0]},{bmm_s[1]},{bmm_s[2]}\n")
         
-        auc_probe_p = auc([x[0] for x in probe_detection_list])
-        auc_probe_r = auc([x[1] for x in probe_detection_list])
-        auc_probe_f = auc([x[2] for x in probe_detection_list])
+        x_axis = [i for i in range(1, len(probe_detection_list)+1)]
+        auc_probe_p = auc(x_axis, [x[0] for x in probe_detection_list])
+        auc_probe_r = auc(x_axis, [x[1] for x in probe_detection_list])
+        auc_probe_f = auc(x_axis, [x[2] for x in probe_detection_list])
         
-        auc_bmm_p = auc([x[0] for x in bmm_detection_list])
-        auc_bmm_r = auc([x[1] for x in bmm_detection_list])
-        auc_bmm_f = auc([x[2] for x in bmm_detection_list])
+        auc_bmm_p = auc(x_axis, [x[0] for x in bmm_detection_list])
+        auc_bmm_r = auc(x_axis, [x[1] for x in bmm_detection_list])
+        auc_bmm_f = auc(x_axis, [x[2] for x in bmm_detection_list])
         
         f.write(f"-1,{auc_probe_p},{auc_probe_r},{auc_probe_f},{auc_bmm_p},{auc_bmm_r},{auc_bmm_f}\n")
 
