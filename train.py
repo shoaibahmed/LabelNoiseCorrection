@@ -206,9 +206,9 @@ def main():
     tolerance = 2
     current_iter = 0
     current_loss_thresh = None
-    threshold_test = True
+    threshold_test = False
     mixup_only_when_flooding = False
-    test_detection_performance = True
+    test_detection_performance = False
     
     if args.flood_test or test_detection_performance:
         probes = {}
@@ -261,7 +261,8 @@ def main():
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
                 
                 # Compute loss thresh
-                if args.dynamic_flood_thresh:
+                start_flooding = epoch > 2  # Start flooding from 3rd epoch onwards
+                if args.dynamic_flood_thresh and start_flooding:
                     if threshold_test:
                         if current_loss_thresh is None:
                             if float(noisy_stats["acc"]) > threshold:
