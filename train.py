@@ -113,6 +113,8 @@ def main():
                         help="Use flooding-based training only after the threshold is met")
     parser.add_argument('--use-one-std-below-noisy-loss', default=False, action='store_true', 
                         help="Use one standard deviation below the mean loss on the noisy probes as the flooding threshold")
+    parser.add_argument('--stop-training', default=False, action='store_true', 
+                        help="Stop training on the examples above the loss value instead of flooding their loss")
     parser.add_argument('--dynamic-flood-thresh', default=False, action='store_true', 
                         help="Use dynamic flooding threshold during training")
 
@@ -216,6 +218,7 @@ def main():
     mixup_only_when_flooding = False
     test_detection_performance = False
     use_one_std_below_noisy_loss = args.use_one_std_below_noisy_loss
+    stop_training = args.stop_training
     
     if args.flood_test or test_detection_performance:
         probes = {}
@@ -258,13 +261,18 @@ def main():
         if args.Mixup in ["None", "Flooding"]:
             if args.flood_test:
                 if args.Mixup == "Flooding":
+                    assert not args.stop_training
                     alpha = 32
                     mixup_alpha = (1. / alpha) if current_loss_thresh is None and mixup_only_when_flooding else alpha
                     print(f"\t##### Doing standard training with mix-up (alpha={mixup_alpha}) loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
                     (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_mixUp_probes(args, model, device, idx_train_loader, optimizer, epoch, mixup_alpha, current_loss_thresh)
                 else:
-                    print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
-                    (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh)
+                    if stop_training:
+                        print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}threshold for stopping training #####")
+                    else:
+                        print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
+                    (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh,
+                                                                                                                             use_ex_weights=stop_training, stop_learning=stop_training)
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
                 
                 # Compute loss thresh
