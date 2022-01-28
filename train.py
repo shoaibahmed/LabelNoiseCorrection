@@ -51,13 +51,15 @@ def test_tensor(model, data, target, msg=None):
     model.eval()
     with torch.no_grad():
         output = model(data)
-        test_loss = float(criterion(output, target).mean())
+        loss_vals = criterion(output, target)
+        test_loss = float(loss_vals.mean())
         pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
         correct = pred.eq(target.view_as(pred)).sum().item()
         total = len(data)
     
     test_acc = 100. * correct / total
-    output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total)
+    output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total, 
+                       loss_vals=loss_vals.detach().cpu().numpy())
     
     header = "Test set" if msg is None else msg
     print(f"{header} | Average loss: {test_loss:.4f} | Accuracy: {correct}/{total} ({test_acc:.2f}%)")
@@ -107,6 +109,10 @@ def main():
                         help="Parameter of the regularization term, default: 0.")
     parser.add_argument('--flood-test', default=False, action='store_true', 
                         help="Use flooding-based training")
+    parser.add_argument('--threshold-test', default=False, action='store_true', 
+                        help="Use flooding-based training only after the threshold is met")
+    parser.add_argument('--use-one-std-below-noisy-loss', default=False, action='store_true', 
+                        help="Use one standard deviation below the mean loss on the noisy probes as the flooding threshold")
     parser.add_argument('--dynamic-flood-thresh', default=False, action='store_true', 
                         help="Use dynamic flooding threshold during training")
 
@@ -206,9 +212,10 @@ def main():
     tolerance = 2
     current_iter = 0
     current_loss_thresh = None
-    threshold_test = False
+    threshold_test = args.threshold_test
     mixup_only_when_flooding = False
     test_detection_performance = False
+    use_one_std_below_noisy_loss = args.use_one_std_below_noisy_loss
     
     if args.flood_test or test_detection_performance:
         probes = {}
@@ -274,11 +281,23 @@ def main():
                             else:
                                 current_iter = 0
                         else:
-                            current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
-                            print(f"Using dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                            # current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                            # print(f"Using dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                            if use_one_std_below_noisy_loss:
+                                loss_mean, loss_std = np.mean(noisy_stats["loss_vals"]), np.std(noisy_stats["loss_vals"])
+                                current_loss_thresh = np.maximum(loss_mean - loss_std, 0.)
+                                print(f"Using threshold-based dynamic flooding barrier. Loss vals: (mean: {loss_mean} / std: {loss_std}). Flooding loss threshold selected to be: {current_loss_thresh}")
+                            else:
+                                current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                                print(f"Using threshold-based dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
                     else:
-                        current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
-                        print(f"Enabling dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
+                        if use_one_std_below_noisy_loss:
+                            loss_mean, loss_std = np.mean(noisy_stats["loss_vals"]), np.std(noisy_stats["loss_vals"])
+                            current_loss_thresh = np.maximum(loss_mean - loss_std, 0.)
+                            print(f"Using consistent dynamic flooding barrier. Loss vals: (mean: {loss_mean} / std: {loss_std}). Flooding loss threshold selected to be: {current_loss_thresh}")
+                        else:
+                            current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+                            print(f"Using consistent dynamic flooding barrier. Flooding loss threshold selected to be: {current_loss_thresh}")
                 else:
                     if current_loss_thresh is None:
                         if float(noisy_stats["acc"]) > threshold:
