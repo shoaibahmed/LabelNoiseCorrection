@@ -423,53 +423,54 @@ def main():
             
             model.train()
     
-    assert len(probe_detection_list) == len(bmm_detection_list)
-    with open(os.path.join(exp_path, "stats.pkl"), "wb") as f:
-        stats_dict = {"probes": probe_detection_list, "bmm": bmm_detection_list}
-        pickle.dump(stats_dict, f)
-    
-    # line_styles = ["solid", "dashed", "dashdor", "dotted"]
-    # marker_list = ["o", "*", "X", "P", "D", "v", "^", "h", "1", "2", "3", "4"]
-    # cm = plt.get_cmap("rainbow")
-    # num_colors = 8
-    # marker_colors = [cm(1.*i/num_colors) for i in range(num_colors)]
-    
-    plt.figure(figsize=(15, 8))
-    # for i in range(len(probe_detection_list)):
-    #     prec_probe, recall_probe, fscore_probe = probe_detection_list[i]
-    #     prec_bmm, recall_bmm, fscore_bmm = bmm_detection_list[i]
-    x_axis = list(range(1, len(probe_detection_list)+1))
-    plt.plot(x_axis, [x[0] for x in probe_detection_list], label="Precision (Probes)")
-    plt.plot(x_axis, [x[1] for x in probe_detection_list], label="Recall (Probes)")
-    plt.plot(x_axis, [x[2] for x in probe_detection_list], label="F-Measure (Probes)")
-    
-    plt.plot(x_axis, [x[0] for x in bmm_detection_list], label="Precision (BMM)")
-    plt.plot(x_axis, [x[1] for x in bmm_detection_list], label="Recall (BMM)")
-    plt.plot(x_axis, [x[2] for x in bmm_detection_list], label="F-Measure (BMM)")
-    
-    plt.xlabel("Epochs")
-    plt.ylabel("Percentage")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(exp_path, "detection_results.png"), dpi=300)
-    
-    with open(os.path.join(exp_path, "stats.csv"), "w") as f:
-        f.write(f"Epoch,Probe Precision,Probe Recall,Probe F-Score,BMM Precision,BMM Recall,BMM F-Score\n")
-        for epoch in range(len(probe_detection_list)):
-            probe_s = probe_detection_list[epoch]
-            bmm_s = bmm_detection_list[epoch]
-            f.write(f"{epoch},{probe_s[0]},{probe_s[1]},{probe_s[2]},{bmm_s[0]},{bmm_s[1]},{bmm_s[2]}\n")
+    if test_detection_performance:
+        assert len(probe_detection_list) == len(bmm_detection_list)
+        with open(os.path.join(exp_path, "stats.pkl"), "wb") as f:
+            stats_dict = {"probes": probe_detection_list, "bmm": bmm_detection_list}
+            pickle.dump(stats_dict, f)
         
-        x_axis = [i for i in range(1, len(probe_detection_list)+1)]
-        auc_probe_p = auc(x_axis, [x[0] for x in probe_detection_list])
-        auc_probe_r = auc(x_axis, [x[1] for x in probe_detection_list])
-        auc_probe_f = auc(x_axis, [x[2] for x in probe_detection_list])
+        # line_styles = ["solid", "dashed", "dashdor", "dotted"]
+        # marker_list = ["o", "*", "X", "P", "D", "v", "^", "h", "1", "2", "3", "4"]
+        # cm = plt.get_cmap("rainbow")
+        # num_colors = 8
+        # marker_colors = [cm(1.*i/num_colors) for i in range(num_colors)]
         
-        auc_bmm_p = auc(x_axis, [x[0] for x in bmm_detection_list])
-        auc_bmm_r = auc(x_axis, [x[1] for x in bmm_detection_list])
-        auc_bmm_f = auc(x_axis, [x[2] for x in bmm_detection_list])
+        plt.figure(figsize=(15, 8))
+        # for i in range(len(probe_detection_list)):
+        #     prec_probe, recall_probe, fscore_probe = probe_detection_list[i]
+        #     prec_bmm, recall_bmm, fscore_bmm = bmm_detection_list[i]
+        x_axis = list(range(1, len(probe_detection_list)+1))
+        plt.plot(x_axis, [x[0] for x in probe_detection_list], label="Precision (Probes)")
+        plt.plot(x_axis, [x[1] for x in probe_detection_list], label="Recall (Probes)")
+        plt.plot(x_axis, [x[2] for x in probe_detection_list], label="F-Measure (Probes)")
         
-        f.write(f"-1,{auc_probe_p},{auc_probe_r},{auc_probe_f},{auc_bmm_p},{auc_bmm_r},{auc_bmm_f}\n")
+        plt.plot(x_axis, [x[0] for x in bmm_detection_list], label="Precision (BMM)")
+        plt.plot(x_axis, [x[1] for x in bmm_detection_list], label="Recall (BMM)")
+        plt.plot(x_axis, [x[2] for x in bmm_detection_list], label="F-Measure (BMM)")
+        
+        plt.xlabel("Epochs")
+        plt.ylabel("Percentage")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(exp_path, "detection_results.png"), dpi=300)
+        
+        with open(os.path.join(exp_path, "stats.csv"), "w") as f:
+            f.write(f"Epoch,Probe Precision,Probe Recall,Probe F-Score,BMM Precision,BMM Recall,BMM F-Score\n")
+            for epoch in range(len(probe_detection_list)):
+                probe_s = probe_detection_list[epoch]
+                bmm_s = bmm_detection_list[epoch]
+                f.write(f"{epoch},{probe_s[0]},{probe_s[1]},{probe_s[2]},{bmm_s[0]},{bmm_s[1]},{bmm_s[2]}\n")
+            
+            x_axis = [i for i in range(1, len(probe_detection_list)+1)]
+            auc_probe_p = auc(x_axis, [x[0] for x in probe_detection_list])
+            auc_probe_r = auc(x_axis, [x[1] for x in probe_detection_list])
+            auc_probe_f = auc(x_axis, [x[2] for x in probe_detection_list])
+            
+            auc_bmm_p = auc(x_axis, [x[0] for x in bmm_detection_list])
+            auc_bmm_r = auc(x_axis, [x[1] for x in bmm_detection_list])
+            auc_bmm_f = auc(x_axis, [x[2] for x in bmm_detection_list])
+            
+            f.write(f"-1,{auc_probe_p},{auc_probe_r},{auc_probe_f},{auc_bmm_p},{auc_bmm_r},{auc_bmm_f}\n")
 
 
 if __name__ == '__main__':
