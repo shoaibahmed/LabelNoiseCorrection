@@ -4,17 +4,23 @@ from natsort import natsorted
 from glob import glob
 import matplotlib.pyplot as plt
 
-if len(sys.argv) != 3:
-    print(f"Usage: {sys.argv[0]} <Model directories> <Output file name>")
+if len(sys.argv) < 4:
+    print(f"Usage: {sys.argv[0]} <Model directories> <Include baselines: T/F> <Output file name>")
     exit()
-model_dirs = sys.argv[1].split(";")
+# model_dirs = sys.argv[1].split(";")
+model_dirs = sys.argv[1:-2]
 assert len(model_dirs) >= 1
-output_file = sys.argv[2]
+include_baseline_results = sys.argv[-2].upper()
+assert include_baseline_results in ["T", "F"]
+include_baseline_results = include_baseline_results == "T"
+output_file = sys.argv[-1]
 assert output_file.endswith(".png")
+print("Input directories:", model_dirs)
+print("Output file:", output_file)
 
 all_results = {}
 for model_dir in model_dirs:
-    assert os.path.exists(model_dir)
+    assert os.path.exists(model_dir), model_dir
     print("Loading model directory:", model_dir)
     models = glob(os.path.join(model_dir, "**/last_epoch_*.pth"), recursive=True)
     print(models)
@@ -63,7 +69,6 @@ noise_levels = natsorted(list(all_results[model_types[0]].keys()))
 print("Noise levels:", noise_levels)
 
 is_cifar100 = 'cifar100' in model_types[0].lower()
-include_baseline_results = True
 plot_end_acc = False
 
 if include_baseline_results:
