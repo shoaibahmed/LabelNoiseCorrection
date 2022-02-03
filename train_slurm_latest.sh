@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# for noise_level in 0 20 50 70 80 90; do
-for noise_level in 0; do
+for noise_level in 0 20 50 70 80 90; do
 
     ### CE loss
     # srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \

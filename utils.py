@@ -260,7 +260,9 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
                 loss = (loss - flooding_level).abs() + flooding_level
         assert loss.shape == (len(data),)
         if use_ex_weights:
-            loss = loss * ex_weights
+            loss = (loss * ex_weights).sum()
+        else:
+            loss = loss.mean()
         
         if use_ssl:
             data_aug = augmentation_func(data)
@@ -269,12 +271,9 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
             ssl_loss = ssl_criterion(ssl_logits, ssl_labels)
             
             # Average the loss from the two views
-            batch_size = len(data)
-            ssl_loss = (ssl_loss[:batch_size] + ssl_loss[batch_size:]) / 2.
-            
-            loss = loss + ssl_lambda * ssl_loss
-        
-        loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
+            # batch_size = len(data)
+            # ssl_loss = (ssl_loss[:batch_size] + ssl_loss[batch_size:]) / 2.
+            loss = loss + (ssl_lambda * ssl_loss).mean()
         
         loss.backward()
         optimizer.step()
