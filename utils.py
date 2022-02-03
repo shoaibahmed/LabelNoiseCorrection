@@ -15,6 +15,8 @@ from sklearn import preprocessing as preprocessing
 import sys
 from tqdm import tqdm
 
+import kornia.augmentation
+
 ######################### Get data and noise adding ##########################
 def get_data_cifar(loader):
     data = loader.sampler.data_source.train_data.copy()
@@ -168,10 +170,62 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch):
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
+
+def info_nce_loss(z1, z2, temperature=0.07):
+    """
+    Adapted from: https://github.com/sthalles/SimCLR/blob/master/simclr.py
+    """
+    # Concatenate the features from the two heads to form the actual features
+    features = torch.cat([z1, z2], dim=0)
+    n_views = 2
+    device = z1.device
+    batch_size = len(z1)
+    
+    labels = torch.cat([torch.arange(batch_size) for i in range(n_views)], dim=0)
+    labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
+    labels = labels.to(device)
+
+    features = torch.nn.functional.normalize(features, dim=1)
+
+    similarity_matrix = torch.matmul(features, features.T)
+    assert similarity_matrix.shape == (n_views * batch_size, n_views * batch_size)
+    assert similarity_matrix.shape == labels.shape
+
+    # discard the main diagonal from both: labels and similarities matrix
+    mask = torch.eye(labels.shape[0], dtype=torch.bool).to(device)
+    labels = labels[~mask].view(labels.shape[0], -1)
+    similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+    assert similarity_matrix.shape == labels.shape
+
+    # select and combine multiple positives
+    positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+
+    # select only the negatives the negatives
+    negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+
+    logits = torch.cat([positives, negatives], dim=1)
+    labels = torch.zeros(logits.shape[0], dtype=torch.long).to(device)
+
+    logits = logits / temperature
+    return logits, labels
+
+
 def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoch, loss_thresh, 
-                              use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False):
+                              use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False, use_ssl=False):
     assert not stop_learning or use_ex_weights
     criterion = nn.CrossEntropyLoss(reduction='none')
+    ssl_criterion = nn.CrossEntropyLoss(reduction='none')
+    ssl_lambda = 0.1
+    
+    augmentation_func = None
+    if use_ssl:
+        input_dim = 32
+        augmentation_list = [kornia.augmentation.RandomRotation(degrees=(-45.0, 45.0)),
+                             kornia.augmentation.RandomPerspective(p=0.5, distortion_scale=0.25),
+                             kornia.augmentation.RandomResizedCrop((input_dim, input_dim), scale=(0.75, 0.75)),
+                             kornia.augmentation.ColorJitter(brightness=0.1, hue=0.1, saturation=0.1, contrast=0.1)]
+        augmentation_func = nn.Sequential(*augmentation_list).to(device)
+        print("Using auxillary SSL objective...")
     
     model.train()
     loss_per_batch = []
@@ -186,7 +240,7 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
 
-        output = model(data)
+        features, output = model(data, return_features=True)
         # output = F.log_softmax(output, dim=1)
         # loss = F.nll_loss(output, target)
         loss = criterion(output, target)
@@ -206,9 +260,21 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
                 loss = (loss - flooding_level).abs() + flooding_level
         assert loss.shape == (len(data),)
         if use_ex_weights:
-            loss = (loss * ex_weights).sum()
-        else:
-            loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
+            loss = loss * ex_weights
+        
+        if use_ssl:
+            data_aug = augmentation_func(data)
+            features_aug, _ = model(data_aug, return_features=True)
+            ssl_logits, ssl_labels = info_nce_loss(features, features_aug)
+            ssl_loss = ssl_criterion(ssl_logits, ssl_labels)
+            
+            # Average the loss from the two views
+            batch_size = len(data)
+            ssl_loss = (ssl_loss[:batch_size] + ssl_loss[batch_size:]) / 2.
+            
+            loss = loss + ssl_lambda * ssl_loss
+        
+        loss = loss.mean()  # Reduction has been disabled -- do explicit reduction
         
         loss.backward()
         optimizer.step()

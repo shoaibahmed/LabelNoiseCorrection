@@ -146,7 +146,7 @@ class ResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x, lin=0, lout=5):
+    def forward(self, x, lin=0, lout=5, return_features=False):
         out = x
         if lin < 1 and lout > -1:
             out = self.conv1(out)
@@ -162,8 +162,10 @@ class ResNet(nn.Module):
             out = self.layer4(out)
         if lout > 4:
             out = F.avg_pool2d(out, 4)
-            out = out.view(out.size(0), -1)
-            out = self.linear(out)
+            features = out.view(out.size(0), -1)
+            out = self.linear(features)
+            if return_features:
+                return features, out
         return out
 
 

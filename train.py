@@ -117,7 +117,8 @@ def main():
                         help="Stop training on the examples above the loss value instead of flooding their loss")
     parser.add_argument('--dynamic-flood-thresh', default=False, action='store_true', 
                         help="Use dynamic flooding threshold during training")
-
+    parser.add_argument('--ssl-training', default=False, action='store_true', 
+                        help="Use SSL training in conjuction with the CE loss -- specifically useful for noisy samples")
 
     args = parser.parse_args()
     
@@ -219,6 +220,7 @@ def main():
     test_detection_performance = False
     use_one_std_below_noisy_loss = args.use_one_std_below_noisy_loss
     stop_training = args.stop_training
+    ssl_training = args.ssl_training
     
     if args.flood_test or test_detection_performance:
         probes = {}
@@ -272,7 +274,7 @@ def main():
                     else:
                         print(f"\t##### Doing standard training with cross-entropy loss and {'dynamic ' if args.dynamic_flood_thresh else ''}flooding #####")
                     (loss_per_epoch, acc_train_per_epoch_i), (example_idx, predictions, targets) = train_CrossEntropy_probes(args, model, device, idx_train_loader, optimizer, epoch, current_loss_thresh,
-                                                                                                                             use_ex_weights=stop_training, stop_learning=stop_training)
+                                                                                                                             use_ex_weights=stop_training, stop_learning=stop_training, use_ssl=ssl_training)
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
                 
                 # Compute loss thresh
@@ -332,11 +334,11 @@ def main():
                 if args.BootBeta == "Hard":
                     print("\t##### Doing HARD BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch,\
-                                                                                    alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
+                                                                                     alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
                 elif args.BootBeta == "Soft":
                     print("\t##### Doing SOFT BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_SoftBootBeta(args, model, device, train_loader, optimizer, epoch, \
-                                                                                    alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
+                                                                                     alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
 
         ## Dynamic Mixup ##
         if args.Mixup == "Dynamic":
@@ -352,8 +354,8 @@ def main():
             else:
                 print("\t##### Going from SOFT BETA bootstrapping to HARD BETA with linear temperature and Dynamic mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                 loss_per_epoch, acc_train_per_epoch_i, countTemp, k = train_mixUp_SoftHardBetaDouble(args, model, device, train_loader, optimizer, \
-                                                                                                                epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, \
-                                                                                                                countTemp, k, temp_length, args.reg_term, num_classes)
+                                                                                                     epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, \
+                                                                                                     countTemp, k, temp_length, args.reg_term, num_classes)
         if args.Mixup != "None" or test_detection_performance:
             ### Training tracking loss
             epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
