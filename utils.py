@@ -168,7 +168,8 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch):
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
-def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoch, loss_thresh, use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False):
+def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoch, loss_thresh, 
+                              use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False):
     assert not stop_learning or use_ex_weights
     criterion = nn.CrossEntropyLoss(reduction='none')
     
