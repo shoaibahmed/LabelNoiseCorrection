@@ -163,11 +163,12 @@ def main():
         num_classes = 100
     else:
         raise NotImplementedError
+    ssl_training = args.ssl_training
         
     train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
     train_loader_track = torch.utils.data.DataLoader(trainset_track, batch_size=args.batch_size, shuffle=False, num_workers=1, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=1, pin_memory=True)
-    model = PreResNet.ResNet18(num_classes=num_classes).to(device)
+    model = PreResNet.ResNet18(num_classes=num_classes, ssl_training=ssl_training).to(device)
 
     milestones = args.M
 
@@ -220,7 +221,6 @@ def main():
     test_detection_performance = False
     use_one_std_below_noisy_loss = args.use_one_std_below_noisy_loss
     stop_training = args.stop_training
-    ssl_training = args.ssl_training
     
     if args.flood_test or test_detection_performance:
         probes = {}

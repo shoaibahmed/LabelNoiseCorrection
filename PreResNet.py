@@ -126,7 +126,7 @@ class PreActBottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, ssl_training=False):
         super(ResNet, self).__init__()
         self.in_planes = 64
 
@@ -136,7 +136,21 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.linear = nn.Linear(512*block.expansion, num_classes)
+        self.feature_dim = 512 * block.expansion
+        self.linear = nn.Linear(self.feature_dim, num_classes)
+        
+        self.ssl_training = ssl_training
+        self.projector = None
+        if self.ssl_training:
+            sizes = [self.feature_dim, 8192, 8192, 8192]
+            layers = []
+            for i in range(len(sizes) - 2):
+                layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
+                layers.append(nn.BatchNorm1d(sizes[i + 1]))
+                layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
+            self.projector = nn.Sequential(*layers)
+            print("Projector:", self.projector)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
@@ -165,24 +179,24 @@ class ResNet(nn.Module):
             features = out.view(out.size(0), -1)
             out = self.linear(features)
             if return_features:
-                return features, out
+                return self.projector(features), out
         return out
 
 
-def ResNet18(num_classes=10):
-    return ResNet(PreActBlock, [2,2,2,2], num_classes=num_classes)
+def ResNet18(num_classes=10, ssl_training=False):
+    return ResNet(PreActBlock, [2,2,2,2], num_classes=num_classes, ssl_training=ssl_training)
 
-def ResNet34(num_classes=10):
-    return ResNet(BasicBlock, [3,4,6,3], num_classes=num_classes)
+def ResNet34(num_classes=10, ssl_training=False):
+    return ResNet(BasicBlock, [3,4,6,3], num_classes=num_classes, ssl_training=ssl_training)
 
-def ResNet50(num_classes=10):
-    return ResNet(Bottleneck, [3,4,6,3], num_classes=num_classes)
+def ResNet50(num_classes=10, ssl_training=False):
+    return ResNet(Bottleneck, [3,4,6,3], num_classes=num_classes, ssl_training=ssl_training)
 
-def ResNet101(num_classes=10):
-    return ResNet(Bottleneck, [3,4,23,3], num_classes=num_classes)
+def ResNet101(num_classes=10, ssl_training=False):
+    return ResNet(Bottleneck, [3,4,23,3], num_classes=num_classes, ssl_training=ssl_training)
 
-def ResNet152(num_classes=10):
-    return ResNet(Bottleneck, [3,8,36,3], num_classes=num_classes)
+def ResNet152(num_classes=10, ssl_training=False):
+    return ResNet(Bottleneck, [3,8,36,3], num_classes=num_classes, ssl_training=ssl_training)
 
 
 def test():
