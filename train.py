@@ -321,7 +321,7 @@ def main():
                             current_iter = 0
             else:
                 print('\t##### Doing standard training with cross-entropy loss #####')
-                loss_per_epoch, acc_train_per_epoch_i = train_CrossEntropy(args, model, device, train_loader, optimizer, epoch)
+                loss_per_epoch, acc_train_per_epoch_i = train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_ssl=ssl_training)
 
         ### Mixup ###
         if args.Mixup == "Static":

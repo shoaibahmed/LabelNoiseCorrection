@@ -132,20 +132,44 @@ def track_training_loss(args, model, device, train_loader, epoch, bmm_model1, bm
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
-def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch):
+def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_ssl=False):
     model.train()
     loss_per_batch = []
-
+    
+    ssl_criterion = nn.CrossEntropyLoss(reduction='none')
+    ssl_lambda = 0.1
+    
+    augmentation_func = None
+    if use_ssl:
+        input_dim = 32
+        augmentation_list = [# kornia.augmentation.RandomRotation(degrees=(-45.0, 45.0)),
+                             # kornia.augmentation.RandomPerspective(p=0.5, distortion_scale=0.25),
+                             kornia.augmentation.RandomResizedCrop((input_dim, input_dim), scale=(0.75, 0.75)),
+                             kornia.augmentation.ColorJitter(brightness=0.1, hue=0.1, saturation=0.1, contrast=0.1)]
+        augmentation_func = nn.Sequential(*augmentation_list).to(device)
+        print("Using auxillary SSL objective with regular CE loss...")
+    
     acc_train_per_batch = []
     correct = 0
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
 
-        output = model(data)
+        features, output = model(data, return_features=True)
         output = F.log_softmax(output, dim=1)
 
         loss = F.nll_loss(output, target)
+        
+        if use_ssl:
+            data_aug = augmentation_func(data)
+            features_aug, _ = model(data_aug, return_features=True)
+            ssl_logits, ssl_labels = info_nce_loss(features, features_aug)
+            ssl_loss = ssl_criterion(ssl_logits, ssl_labels)
+            
+            # Average the loss from the two views
+            # batch_size = len(data)
+            # ssl_loss = (ssl_loss[:batch_size] + ssl_loss[batch_size:]) / 2.
+            loss = loss + (ssl_lambda * ssl_loss).mean()
 
         loss.backward()
         optimizer.step()
@@ -220,8 +244,8 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
     augmentation_func = None
     if use_ssl:
         input_dim = 32
-        augmentation_list = [kornia.augmentation.RandomRotation(degrees=(-45.0, 45.0)),
-                             kornia.augmentation.RandomPerspective(p=0.5, distortion_scale=0.25),
+        augmentation_list = [# kornia.augmentation.RandomRotation(degrees=(-45.0, 45.0)),
+                             # kornia.augmentation.RandomPerspective(p=0.5, distortion_scale=0.25),
                              kornia.augmentation.RandomResizedCrop((input_dim, input_dim), scale=(0.75, 0.75)),
                              kornia.augmentation.ColorJitter(brightness=0.1, hue=0.1, saturation=0.1, contrast=0.1)]
         augmentation_func = nn.Sequential(*augmentation_list).to(device)
