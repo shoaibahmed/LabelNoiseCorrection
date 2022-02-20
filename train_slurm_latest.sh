@@ -29,15 +29,42 @@ for noise_level in 0 20 50 70 80 90; do
     #         --epochs 300 --M 100 250 --noise-level ${noise_level} --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
     #         > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs/cifar10_ce_stop_train_noise_${noise_level}_baseline_tol_2_thresh_20.log 2>&1 &
 
-    ### CE loss with threshold-based noisy identification for stopping training
+    ### CE loss with dynamic identification for stopping training 
     srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
-        --kill-on-bad-exit --job-name cifar10-ce-stop-train-ssl-noise-${noise_level}-baseline-tol-2-thresh-20 --nice=0 \
+        --kill-on-bad-exit --job-name cifar10-ce-stop-train-noise-${noise_level}-baseline-dynamic-thresh-3rd-ep --nice=0 \
         --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
         --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
-        /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train.py --Mixup 'None' --experiment-name "CIFAR10-CE-Stop-Train-SSL-Baseline-Tol-2-Thresh-20" --flood-test --threshold-test --stop-training --ssl-training --BootBeta None \
+        /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train.py --Mixup 'None' --experiment-name "CIFAR10-CE-Stop-Train-Baseline-Dynamic-Thresh-3rd-Ep" --flood-test --dynamic-flood-thresh --stop-training --BootBeta None \
             --epochs 300 --M 100 250 --noise-level ${noise_level} --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
-            > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs/cifar10_ce_stop_train_ssl_noise_${noise_level}_baseline_tol_2_thresh_20.log 2>&1 &
+            > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs/cifar10_ce_stop_train_noise_${noise_level}_baseline_dynamic_thresh_3rd_ep.log 2>&1 &
+
+    ### CE loss with threshold-based noisy identification for stopping training
+    # srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
+    #     --kill-on-bad-exit --job-name cifar10-ce-stop-train-ssl-proj-noise-${noise_level}-baseline-tol-2-thresh-20 --nice=0 \
+    #     --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
+    #     --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
+    #     /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train.py --Mixup 'None' --experiment-name "CIFAR10-CE-Stop-Train-SSL-Proj-Baseline-Tol-2-Thresh-20" --flood-test --threshold-test --stop-training --ssl-training --BootBeta None \
+    #         --epochs 300 --M 100 250 --noise-level ${noise_level} --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
+    #         > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs/cifar10_ce_stop_train_ssl_proj_noise_${noise_level}_baseline_tol_2_thresh_20.log 2>&1 &
     
+    ### CE loss with SSL
+    # srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
+    #     --kill-on-bad-exit --job-name cifar10-ce-ssl-proj-noise-${noise_level}-baseline --nice=0 \
+    #     --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
+    #     --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
+    #     /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train.py --Mixup 'None' --experiment-name "CIFAR10-CE-SSL-Proj-Baseline" --ssl-training --BootBeta None \
+    #         --epochs 300 --M 100 250 --noise-level ${noise_level} --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
+    #         > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs/cifar10_ce_ssl_proj_noise_${noise_level}_baseline.log 2>&1 &
+
+    ### CE loss with SSL (MSE)
+    # srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
+    #     --kill-on-bad-exit --job-name cifar10-ce-ssl-proj-mse-noise-${noise_level}-baseline --nice=0 \
+    #     --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
+    #     --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
+    #     /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train.py --Mixup 'None' --experiment-name "CIFAR10-CE-SSL-Proj-MSE-Baseline" --ssl-training --BootBeta None \
+    #         --epochs 300 --M 100 250 --noise-level ${noise_level} --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
+    #         > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs/cifar10_ce_ssl_proj_mse_noise_${noise_level}_baseline.log 2>&1 &
+
     ### CE loss with dynamic flooding after 3rd epoch onwards
     # srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
     #     --kill-on-bad-exit --job-name cifar10-ce-flood-noise-${noise_level}-baseline-dynamic-thresh-3rd-ep --nice=0 \

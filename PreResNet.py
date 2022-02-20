@@ -140,7 +140,7 @@ class ResNet(nn.Module):
         self.linear = nn.Linear(self.feature_dim, num_classes)
         
         self.ssl_training = ssl_training
-        self.projector = None
+        self.projector = nn.Identity()
         if self.ssl_training:
             sizes = [self.feature_dim, 8192, 8192, 8192]
             layers = []

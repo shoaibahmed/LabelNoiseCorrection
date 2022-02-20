@@ -132,11 +132,17 @@ def track_training_loss(args, model, device, train_loader, epoch, bmm_model1, bm
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
-def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_ssl=False):
+
+def feature_loss(features_a, features_b):
+    criterion = nn.MSELoss()
+    return criterion(features_a, features_b)
+
+
+def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_ssl=False, use_mse=True):
     model.train()
     loss_per_batch = []
     
-    ssl_criterion = nn.CrossEntropyLoss(reduction='none')
+    ssl_criterion = nn.CrossEntropyLoss()
     ssl_lambda = 0.1
     
     augmentation_func = None
@@ -147,7 +153,7 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_
                              kornia.augmentation.RandomResizedCrop((input_dim, input_dim), scale=(0.75, 0.75)),
                              kornia.augmentation.ColorJitter(brightness=0.1, hue=0.1, saturation=0.1, contrast=0.1)]
         augmentation_func = nn.Sequential(*augmentation_list).to(device)
-        print("Using auxillary SSL objective with regular CE loss...")
+        print(f"Using auxillary SSL objective{' with MSE' if use_mse else ''} with regular CE loss...")
     
     acc_train_per_batch = []
     correct = 0
@@ -163,13 +169,16 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_
         if use_ssl:
             data_aug = augmentation_func(data)
             features_aug, _ = model(data_aug, return_features=True)
-            ssl_logits, ssl_labels = info_nce_loss(features, features_aug)
-            ssl_loss = ssl_criterion(ssl_logits, ssl_labels)
+            if use_mse:
+                ssl_loss = feature_loss(features, features_aug)
+            else:
+                ssl_logits, ssl_labels = info_nce_loss(features, features_aug)
+                ssl_loss = ssl_criterion(ssl_logits, ssl_labels)
             
             # Average the loss from the two views
             # batch_size = len(data)
             # ssl_loss = (ssl_loss[:batch_size] + ssl_loss[batch_size:]) / 2.
-            loss = loss + (ssl_lambda * ssl_loss).mean()
+            loss = loss + ssl_lambda * ssl_loss
 
         loss.backward()
         optimizer.step()
@@ -238,7 +247,8 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
                               use_thresh_as_flood=False, use_ex_weights=False, stop_learning=False, use_ssl=False):
     assert not stop_learning or use_ex_weights
     criterion = nn.CrossEntropyLoss(reduction='none')
-    ssl_criterion = nn.CrossEntropyLoss(reduction='none')
+    # ssl_criterion = nn.CrossEntropyLoss(reduction='none')
+    ssl_criterion = nn.CrossEntropyLoss()
     ssl_lambda = 0.1
     
     augmentation_func = None
@@ -269,7 +279,7 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
         # loss = F.nll_loss(output, target)
         loss = criterion(output, target)
 
-        ex_weights = torch.ones_like(loss) / len(loss)  # Equal weight for averaging
+        ex_weights = torch.ones_like(loss) # / len(loss)  # Equal weight for averaging
         if loss_thresh is not None:
             if stop_learning:
                 ex_weights[loss >= loss_thresh] = 0.  # Don't train on these examples
@@ -284,7 +294,7 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
                 loss = (loss - flooding_level).abs() + flooding_level
         assert loss.shape == (len(data),)
         if use_ex_weights:
-            loss = (loss * ex_weights).sum()
+            loss = (loss * ex_weights).sum() / ex_weights.sum()
         else:
             loss = loss.mean()
         
@@ -297,7 +307,7 @@ def train_CrossEntropy_probes(args, model, device, train_loader, optimizer, epoc
             # Average the loss from the two views
             # batch_size = len(data)
             # ssl_loss = (ssl_loss[:batch_size] + ssl_loss[batch_size:]) / 2.
-            loss = loss + (ssl_lambda * ssl_loss).mean()
+            loss = loss + ssl_lambda * ssl_loss
         
         loss.backward()
         optimizer.step()
