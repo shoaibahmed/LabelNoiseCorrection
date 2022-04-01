@@ -619,7 +619,7 @@ def compute_is_noisy(data, target, model, probes):
         current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
         
         # Compare the numbers between noisy training set and 
-        is_noisy = batch_losses >= current_loss_thresh
+        is_noisy = (batch_losses >= current_loss_thresh).to(torch.float32)
         
         model.train()
         num_noisy_ex = int(is_noisy.sum())
