@@ -44,27 +44,27 @@ class IdxDataset(torch.utils.data.Dataset):
         return self.dataset[idx], idx
 
 
-def test_tensor(model, data, target, msg=None):
-    assert torch.is_tensor(data) and torch.is_tensor(target)
-    criterion = nn.CrossEntropyLoss()
+# def test_tensor(model, data, target, msg=None):
+#     assert torch.is_tensor(data) and torch.is_tensor(target)
+#     criterion = nn.CrossEntropyLoss()
     
-    model.eval()
-    with torch.no_grad():
-        output = model(data)
-        loss_vals = criterion(output, target)
-        test_loss = float(loss_vals.mean())
-        pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-        correct = pred.eq(target.view_as(pred)).sum().item()
-        total = len(data)
+#     model.eval()
+#     with torch.no_grad():
+#         output = model(data)
+#         loss_vals = criterion(output, target)
+#         test_loss = float(loss_vals.mean())
+#         pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+#         correct = pred.eq(target.view_as(pred)).sum().item()
+#         total = len(data)
     
-    test_acc = 100. * correct / total
-    output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total, 
-                       loss_vals=loss_vals.detach().cpu().numpy())
+#     test_acc = 100. * correct / total
+#     output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total, 
+#                        loss_vals=loss_vals.detach().cpu().numpy())
     
-    header = "Test set" if msg is None else msg
-    print(f"{header} | Average loss: {test_loss:.4f} | Accuracy: {correct}/{total} ({test_acc:.2f}%)")
+#     header = "Test set" if msg is None else msg
+#     print(f"{header} | Average loss: {test_loss:.4f} | Accuracy: {correct}/{total} ({test_acc:.2f}%)")
     
-    return output_dict
+#     return output_dict
 
 
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
@@ -102,7 +102,7 @@ def main():
     parser.add_argument('--Mixup', type=str, default='None', choices=['None', 'Static', 'Dynamic', 'Flooding'],
                         help="Type of bootstrapping. Available: 'None' (deactivated)(default), \
                                 'Static' (as in the paper), 'Dynamic' (BMM to mix the smaples, will use decreasing softmax), default: None")
-    parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'Soft'],
+    parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'HardProbes', 'Soft'],
                         help="Type of Bootstrapping guided with the BMM. Available: \
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
@@ -221,8 +221,9 @@ def main():
     test_detection_performance = False
     use_one_std_below_noisy_loss = args.use_one_std_below_noisy_loss
     stop_training = args.stop_training
+    use_probes = "Probes" in args.BootBeta
     
-    if args.flood_test or test_detection_performance:
+    if args.flood_test or test_detection_performance or use_probes:
         probes = {}
         tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
         num_example_probes = 250  # 0.5% of the dataset
@@ -325,6 +326,7 @@ def main():
 
         ### Mixup ###
         if args.Mixup == "Static":
+            # TODO: Include it here
             alpha = args.alpha
             if epoch < bootstrap_ep_mixup:
                 print('\t##### Doing NORMAL mixup for {0} epochs #####'.format(bootstrap_ep_mixup - 1))
@@ -335,6 +337,10 @@ def main():
                     print("\t##### Doing HARD BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch,\
                                                                                      alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
+                if args.BootBeta == "HardProbes":
+                    print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer, epoch,\
+                                                                                     alpha, args.reg_term, num_classes, probes)
                 elif args.BootBeta == "Soft":
                     print("\t##### Doing SOFT BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_SoftBootBeta(args, model, device, train_loader, optimizer, epoch, \
