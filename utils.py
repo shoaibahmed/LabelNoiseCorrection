@@ -606,7 +606,7 @@ def test_tensor(model, data, target, msg=None):
     
     return output_dict
 
-def compute_is_noisy(data, target, model, probes):
+def compute_is_noisy(data, target, model, probes, use_std_below=True):
     with torch.no_grad():
         model.eval()
         outputs = model(data)
@@ -616,7 +616,11 @@ def compute_is_noisy(data, target, model, probes):
         outputs.detach_()
         
         noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
-        current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+        if use_std_below:
+            current_loss_thresh = np.mean(noisy_stats["loss_vals"]) - 3 * np.std(noisy_stats["loss_vals"])  # One standard deviation below the mean
+            # current_loss_thresh = np.mean(noisy_stats["loss_vals"]) / 2.  # Half of the mean loss on the noisy probes -- assuming to split the loss into two sets
+        else:
+            current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
         
         # Compare the numbers between noisy training set and 
         is_noisy = (batch_losses >= current_loss_thresh).to(torch.float32)

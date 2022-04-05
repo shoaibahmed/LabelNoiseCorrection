@@ -164,7 +164,7 @@ def main():
     else:
         raise NotImplementedError
     ssl_training = args.ssl_training
-        
+    
     train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
     train_loader_track = torch.utils.data.DataLoader(trainset_track, batch_size=args.batch_size, shuffle=False, num_workers=1, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=1, pin_memory=True)
@@ -230,7 +230,33 @@ def main():
         normalizer = transforms.Normalize(mean, std)
         
         # probes["noisy"] = torch.clamp(torch.randn(num_example_probes, *tensor_shape), 0., 1.)
-        probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
+        use_mislabeled_examples = True
+        if use_mislabeled_examples:
+            print("Using examples from the dataset with random labels as probe...")
+            selected_indices = np.random.choice(np.arange(len(trainset)), size=num_example_probes, replace=False)
+            assert len(np.unique(selected_indices)) == len(selected_indices)
+            
+            transforms_clean = transforms.ToTensor()
+            images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
+            probes["noisy"] = torch.stack([transforms_clean(x) for x in images], dim=0)
+            print("Selected image shape:", probes["noisy"].shape)
+            
+            # Remove these examples from the dataset
+            print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+            num_total_examples = len(trainset)
+            trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in selected_indices]
+            trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in selected_indices]
+            misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in selected_indices]
+            
+            # Reinitialize the dataloader to generate the right indices for sampler
+            train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+            print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+        
+        else:
+            print("Creating random examples with random labels as probe...")
+            probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
+        
+        assert probes["noisy"].shape == (num_example_probes, *tensor_shape)
         probes["noisy"] = normalizer(probes["noisy"]).to(device)
         probes["noisy_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
         
