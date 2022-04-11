@@ -107,6 +107,8 @@ def main():
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
                         help="Parameter of the regularization term, default: 0.")
+    parser.add_argument('--std-lambda', type=float, default=0., 
+                        help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
     parser.add_argument('--flood-test', default=False, action='store_true', 
                         help="Use flooding-based training")
     parser.add_argument('--threshold-test', default=False, action='store_true', 
@@ -272,6 +274,7 @@ def main():
         
         idx_dataset = IdxDataset(comb_trainset, dataset_probe_identity)
         idx_train_loader = torch.utils.data.DataLoader(idx_dataset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+        train_loader_w_probes = torch.utils.data.DataLoader(comb_trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
         
         total_instances = len(idx_dataset)
         noisy_probe_instances = np.sum([1 if dataset_probe_identity[i] == "noisy_probe" else 0 for i in range(len(idx_dataset))])
@@ -365,8 +368,8 @@ def main():
                                                                                      alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
                 if args.BootBeta == "HardProbes":
                     print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
-                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer, epoch,\
-                                                                                     alpha, args.reg_term, num_classes, probes)
+                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                                                                                     alpha, args.reg_term, num_classes, probes, args.std_lambda)
                 elif args.BootBeta == "Soft":
                     print("\t##### Doing SOFT BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_SoftBootBeta(args, model, device, train_loader, optimizer, epoch, \

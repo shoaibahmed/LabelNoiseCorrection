@@ -606,7 +606,7 @@ def test_tensor(model, data, target, msg=None):
     
     return output_dict
 
-def compute_is_noisy(data, target, model, probes, use_std_below=True):
+def compute_is_noisy(data, target, model, probes, std_lambda=0.0, use_std=True):
     with torch.no_grad():
         model.eval()
         outputs = model(data)
@@ -615,9 +615,12 @@ def compute_is_noisy(data, target, model, probes, use_std_below=True):
         batch_losses.detach_()
         outputs.detach_()
         
-        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
-        if use_std_below:
-            current_loss_thresh = np.mean(noisy_stats["loss_vals"]) - 3 * np.std(noisy_stats["loss_vals"])  # One standard deviation below the mean
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
+        if use_std:
+            loss_mean = np.mean(noisy_stats["loss_vals"])
+            loss_std = np.std(noisy_stats["loss_vals"])
+            current_loss_thresh = loss_mean + std_lambda * loss_std  # One standard deviation below the mean
+            print(f"Noisy probes (std. lambda: {std_lambda}) | Mean: {loss_mean:.4f} | Std: {loss_std:.4f} | Threshold: {current_loss_thresh:.4f}")
             # current_loss_thresh = np.mean(noisy_stats["loss_vals"]) / 2.  # Half of the mean loss on the noisy probes -- assuming to split the loss into two sets
         else:
             current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
@@ -630,7 +633,7 @@ def compute_is_noisy(data, target, model, probes, use_std_below=True):
         print(f"Noise predictions \t Clean examples: {len(is_noisy)-num_noisy_ex} \t Noisy examples: {num_noisy_ex}")
         return is_noisy
 
-def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes):
+def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
     model.train()
     loss_per_batch = []
 
@@ -651,7 +654,7 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B = compute_is_noisy(data, target, model, probes)
+        B = compute_is_noisy(data, target, model, probes, std_lambda)
         B = B.to(device)
         B[B <= 1e-4] = 1e-4
         B[B >= 1 - 1e-4] = 1 - 1e-4
