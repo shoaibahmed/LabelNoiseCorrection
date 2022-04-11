@@ -107,8 +107,7 @@ def main():
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
                         help="Parameter of the regularization term, default: 0.")
-    parser.add_argument('--std-lambda', type=float, default=0., 
-                        help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
+    
     parser.add_argument('--flood-test', default=False, action='store_true', 
                         help="Use flooding-based training")
     parser.add_argument('--threshold-test', default=False, action='store_true', 
@@ -121,7 +120,12 @@ def main():
                         help="Use dynamic flooding threshold during training")
     parser.add_argument('--ssl-training', default=False, action='store_true', 
                         help="Use SSL training in conjuction with the CE loss -- specifically useful for noisy samples")
-
+    
+    parser.add_argument('--std-lambda', type=float, default=0., 
+                        help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
+    parser.add_argument('--use-mislabeled-examples', default=False, action='store_true', 
+                        help="Use mislabeled examples instead of the noisy probes to identify the correct point to stop model training")
+    
     args = parser.parse_args()
     
     print(args)
@@ -232,8 +236,7 @@ def main():
         normalizer = transforms.Normalize(mean, std)
         
         # probes["noisy"] = torch.clamp(torch.randn(num_example_probes, *tensor_shape), 0., 1.)
-        use_mislabeled_examples = True
-        if use_mislabeled_examples:
+        if args.use_mislabeled_examples:
             print("Using examples from the dataset with random labels as probe...")
             selected_indices = np.random.choice(np.arange(len(trainset)), size=num_example_probes, replace=False)
             assert len(np.unique(selected_indices)) == len(selected_indices)
