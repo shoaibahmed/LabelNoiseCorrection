@@ -586,7 +586,7 @@ def train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch
 
 def test_tensor(model, data, target, msg=None):
     assert torch.is_tensor(data) and torch.is_tensor(target)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(reduction='none')
     
     model.eval()
     with torch.no_grad():
@@ -619,8 +619,10 @@ def compute_is_noisy(data, target, model, probes, std_lambda=0.0, use_std=True):
         if use_std:
             loss_mean = np.mean(noisy_stats["loss_vals"])
             loss_std = np.std(noisy_stats["loss_vals"])
+            acc = noisy_stats["acc"]
+            assert len(noisy_stats["loss_vals"]) == len(probes), f"{len(noisy_stats['loss_vals'])} != {len(probes)}"
             current_loss_thresh = loss_mean + std_lambda * loss_std  # One standard deviation below the mean
-            print(f"Noisy probes (std. lambda: {std_lambda}) | Mean: {loss_mean:.4f} | Std: {loss_std:.4f} | Threshold: {current_loss_thresh:.4f}")
+            print(f"Noisy probes (std. lambda: {std_lambda}) | Acc: {acc:.2f}% | Mean: {loss_mean:.4f} | Std: {loss_std:.4f} | Threshold: {current_loss_thresh:.4f}")
             # current_loss_thresh = np.mean(noisy_stats["loss_vals"]) / 2.  # Half of the mean loss on the noisy probes -- assuming to split the loss into two sets
         else:
             current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
