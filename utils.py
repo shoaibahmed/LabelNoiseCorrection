@@ -620,8 +620,8 @@ def compute_is_noisy(data, target, model, probes, std_lambda=0.0, use_std=True):
             loss_mean = np.mean(noisy_stats["loss_vals"])
             loss_std = np.std(noisy_stats["loss_vals"])
             acc = noisy_stats["acc"]
-            assert len(noisy_stats["loss_vals"]) == len(probes), f"{len(noisy_stats['loss_vals'])} != {len(probes)}"
-            current_loss_thresh = loss_mean + std_lambda * loss_std  # One standard deviation below the mean
+            assert len(noisy_stats["loss_vals"]) == len(probes["noisy_labels"]), f"{len(noisy_stats['loss_vals'])} != {len(probes['noisy_labels'])}"
+            current_loss_thresh = max(loss_mean + std_lambda * loss_std, 0.0)  # One standard deviation below the mean
             print(f"Noisy probes (std. lambda: {std_lambda}) | Acc: {acc:.2f}% | Mean: {loss_mean:.4f} | Std: {loss_std:.4f} | Threshold: {current_loss_thresh:.4f}")
             # current_loss_thresh = np.mean(noisy_stats["loss_vals"]) / 2.  # Half of the mean loss on the noisy probes -- assuming to split the loss into two sets
         else:

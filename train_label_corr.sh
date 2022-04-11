@@ -4,7 +4,7 @@
 # 	--epochs 300 --M 100 250 --noise-level 80 --reg-term 1.0 --dataset CIFAR10 --root-dir /PATH/TO/CIFAR/
 
 # for noise_level in 0 20 50 70 80 90; do
-for noise_level in 70; do
+for noise_level in 0 20 50 70 80 90; do
     # ### MixUp with hard bootsraping and probes for noisy example identification 
     # job=cifar10_noise_${noise_level}_m_dyr_h_probes
     # srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
