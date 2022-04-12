@@ -125,6 +125,8 @@ def main():
                         help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
     parser.add_argument('--use-mislabeled-examples', default=False, action='store_true', 
                         help="Use mislabeled examples instead of the noisy probes to identify the correct point to stop model training")
+    parser.add_argument('--bootstrap-epochs', type=int, default=None, 
+                        help="Number of epochs for the model to be trained conventionally (without label correction) -- defaults to 105 epochs.")
     
     args = parser.parse_args()
     
@@ -201,7 +203,19 @@ def main():
 
     if not os.path.isdir(exp_path):
         os.makedirs(exp_path)
-
+    else:
+        # Check if the experiment completed or not
+        files = os.listdir(exp_path)
+        last_epoch_exists = any([x.startswith("last_epoch") for x in files])
+        print("Contents in existing output directory:", files)
+        if last_epoch_exists:
+            print("Output directory already exists and the experiment seems to be completed. Skipping experiment...")
+            exit()
+        else:
+            # Remove the old directory and recreate it
+            os.rmdir(exp_path)
+            os.makedirs(exp_path)
+            print("Recreated the output directory after deleting old results...")
     bmm_model=bmm_model_maxLoss=bmm_model_minLoss=cont=k = 0
 
     bootstrap_ep_std = milestones[0] + 5 + 1 # the +1 is because the conditions are defined as ">" or "<" not ">="
@@ -210,7 +224,11 @@ def main():
     if args.Mixup == 'Dynamic':
         bootstrap_ep_mixup = guidedMixup_ep + 5
     else:
-        bootstrap_ep_mixup = milestones[0] + 5 + 1
+        if args.bootstrap_epochs is not None:
+            bootstrap_ep_mixup = int(args.bootstrap_epochs) + 1
+        else:
+            bootstrap_ep_mixup = milestones[0] + 5 + 1
+    print("Using bootstrap epochs to be:", bootstrap_ep_mixup)
 
     countTemp = 1
 
