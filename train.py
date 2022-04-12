@@ -125,6 +125,8 @@ def main():
                         help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
     parser.add_argument('--use-mislabeled-examples', default=False, action='store_true', 
                         help="Use mislabeled examples instead of the noisy probes to identify the correct point to stop model training")
+    parser.add_argument('--use-probes-for-pretraining', default=False, action='store_true', 
+                        help="Also include probes for pretraining phase.")
     parser.add_argument('--bootstrap-epochs', type=int, default=None, 
                         help="Number of epochs for the model to be trained conventionally (without label correction) -- defaults to 105 epochs.")
     
@@ -376,11 +378,13 @@ def main():
 
         ### Mixup ###
         if args.Mixup == "Static":
-            # TODO: Include it here
             alpha = args.alpha
             if epoch < bootstrap_ep_mixup:
-                print('\t##### Doing NORMAL mixup for {0} epochs #####'.format(bootstrap_ep_mixup - 1))
-                loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader, optimizer, epoch, 32)
+                print('\t##### Doing NORMAL mixup{0} for {1} epochs #####'.format(' with probes' if args.use_probes_for_pretraining else '', bootstrap_ep_mixup - 1))
+                loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
+                # Evaluate the model performance on
+                msg = f"Probe during pretraining{' (train_set + probe)' if args.use_probes_for_pretraining else ''}"
+                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
 
             else:
                 if args.BootBeta == "Hard":
