@@ -129,6 +129,8 @@ def main():
                         help="Also include probes for pretraining phase.")
     parser.add_argument('--bootstrap-epochs', type=int, default=None, 
                         help="Number of epochs for the model to be trained conventionally (without label correction) -- defaults to 105 epochs.")
+    parser.add_argument('--bootstrap-probe-acc-thresh', type=float, default=None, 
+                        help="Accuracy on the probes to be reached for the bootstraping to stop.")
     
     args = parser.parse_args()
     
@@ -385,6 +387,11 @@ def main():
                 # Evaluate the model performance on
                 msg = f"Probe during pretraining{' (train_set + probe)' if args.use_probes_for_pretraining else ''}"
                 noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
+                
+                if args.bootstrap_probe_acc_thresh is not None:
+                    if noisy_stats["acc"] >= args.bootstrap_probe_acc_thresh:
+                        print(f"!! Accuracy on probe exceeded to {noisy_stats['acc']}% (threhold={args.bootstrap_probe_acc_thresh}%). Stopping pretraining...")
+                        bootstrap_ep_mixup = epoch
 
             else:
                 if args.BootBeta == "Hard":
