@@ -384,9 +384,10 @@ def main():
             if epoch < bootstrap_ep_mixup:
                 print('\t##### Doing NORMAL mixup{0} for {1} epochs #####'.format(' with probes' if args.use_probes_for_pretraining else '', bootstrap_ep_mixup - 1))
                 loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
-                # Evaluate the model performance on
-                msg = f"Probe during pretraining{' (train_set + probe)' if args.use_probes_for_pretraining else ''}"
-                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
+                if probes is not None:
+                    # Evaluate the model performance on
+                    msg = f"Probe during pretraining{' (train_set + probe)' if args.use_probes_for_pretraining else ''}"
+                    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
                 
                 if args.bootstrap_probe_acc_thresh is not None:
                     if noisy_stats["acc"] >= args.bootstrap_probe_acc_thresh:
