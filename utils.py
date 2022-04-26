@@ -72,6 +72,114 @@ def add_noise_cifar_w(loader, noise_percentage = 20):
 
     return noisy_labels
 
+#Noise with the sample class (as in Re-thinking generalization )
+def add_noise_cifar_w_new(loader, noise_percentage = 20, changed_idx_list: list = None):
+    torch.manual_seed(2)
+    np.random.seed(42)
+    noisy_labels = [sample_i for sample_i in loader.sampler.data_source.targets]
+    available_idx = [i for i in range(len(loader.sampler.data_source.targets)) if i not in changed_idx_list]
+    
+    images = [sample_i for sample_i in loader.sampler.data_source.data]
+    probs_to_change = torch.randint(100, (len(noisy_labels),))
+    noisy_input_percentage = 100. * len(changed_idx_list) / len(noisy_labels)
+    idx_to_change = probs_to_change >= (100.0 - noise_percentage - noisy_input_percentage)
+    percentage_of_bad_labels = 100 * (torch.sum(idx_to_change).item() / float(len(noisy_labels)))
+
+    changed_idx = []
+    for n, label_i in enumerate(noisy_labels):
+        if idx_to_change[n] == 1 and n not in changed_idx_list:
+            set_labels = list(set(range(10)))  # this is a set with the available labels (with the current label)
+            set_index = np.random.randint(len(set_labels))
+            noisy_labels[n] = set_labels[set_index]
+            changed_idx.append(n)
+
+    loader.sampler.data_source.data = images
+    loader.sampler.data_source.targets = noisy_labels
+    print(f"Total examples: {len(noisy_labels)} / Noisy inputs: {len(changed_idx_list)} / Total labels changed: {len(changed_idx)} ")
+
+    assert all([i not in changed_idx_list for i in changed_idx])
+    return noisy_labels, changed_idx
+
+class AddGaussianNoise(object):
+    def __init__(self, mean=0., std=1.):
+        self.std = std
+        self.mean = mean
+    
+    def __call__(self, tensor):
+        return torch.clip(tensor + torch.randn(tensor.size()) * self.std + self.mean, 0.0, 1.0)
+
+class ClampRangeTransform(object):
+    def __init__(self, min_range, max_range):
+        self.min_range = min_range
+        self.max_range = max_range
+    
+    def __call__(self, x):
+        return torch.clamp(x, self.min_range, self.max_range)
+
+def add_input_noise(x):
+    assert isinstance(x, torch.Tensor)
+    assert len(x.shape) == 3
+    assert x.shape == (3, 32, 32)
+    assert x.dtype == torch.uint8
+
+    max_val = x.abs().max()
+    # print("Max val in image:", max_val)
+    noise_std = max_val * 0.2  # 10% of the maximum deviation
+    
+    # Color jitter after normalization?
+    corruption_transform = transforms.Compose([transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1),
+                                               transforms.RandomApply([AddGaussianNoise(mean=0.0, std=noise_std)], p=0.5),
+                                               transforms.GaussianBlur(kernel_size=9, sigma=(0.1, 2.0)),
+                                               ClampRangeTransform(0, 255)])
+    
+    x = corruption_transform(x)
+    return x.to(torch.uint8)
+
+def add_input_noise_np(x):
+    assert isinstance(x, np.ndarray)
+    assert len(x.shape) == 3
+    assert x.shape == (32, 32, 3)
+
+    x = torch.from_numpy(x).permute(2, 0, 1)  # HWC -> CHW
+    x = add_input_noise(x)
+    x = x.permute(1, 2, 0).numpy()  # CHW -> HWC
+    
+    assert x.shape == (32, 32, 3)
+    return x
+
+# Add input noise to the examples
+def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform = None):
+    assert post_proc_transform is None
+    
+    torch.manual_seed(2)
+    np.random.seed(42)
+    noisy_labels = [sample_i for sample_i in loader.sampler.data_source.targets]
+    images = [sample_i for sample_i in loader.sampler.data_source.data]
+    probs_to_change = torch.randint(100, (len(noisy_labels),))
+    idx_to_change = probs_to_change >= (100.0 - noise_percentage)
+
+    changed_idx = []
+    for n, label_i in enumerate(noisy_labels):
+        if idx_to_change[n] == 1:
+            assert isinstance(images[n], np.ndarray)
+            assert images[n].dtype == np.uint8
+            
+            # Augment the np array
+            images[n] = add_input_noise_np(images[n])
+            
+            assert isinstance(images[n], np.ndarray)
+            assert images[n].dtype == np.uint8
+            
+            changed_idx.append(n)
+        
+        if post_proc_transform is not None:
+            images[n] = post_proc_transform(images[n])
+
+    loader.sampler.data_source.data = images
+    loader.sampler.data_source.targets = noisy_labels
+
+    return changed_idx
+
 
 ##############################################################################
 
