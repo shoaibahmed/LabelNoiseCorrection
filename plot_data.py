@@ -2,6 +2,8 @@ import os
 import sys
 from natsort import natsorted
 from glob import glob
+
+import numpy as np
 import matplotlib.pyplot as plt
 
 if len(sys.argv) < 4:
@@ -20,6 +22,9 @@ print("Output file:", output_file)
 
 all_results = {}
 for model_dir in model_dirs:
+    if model_dir.startswith("#"):
+        print("Ignoring commented line:", model_dir)
+        continue
     assert os.path.exists(model_dir), model_dir
     print("Loading model directory:", model_dir)
     models = glob(os.path.join(model_dir, "**/last_epoch_*.pth"), recursive=True)
@@ -36,7 +41,7 @@ for model_dir in model_dirs:
         
         assert model_name_parts[7] == "noise"
         noise_level = float(model_name_parts[8])
-        assert noise_level in [float(x) for x in range(0, 100, 10)]
+        assert noise_level in [float(x) for x in range(0, 100, 5)]
         
         assert model_name_parts[9] == "bestValLoss"
         best_val_acc = float(model_name_parts[10])
@@ -65,7 +70,11 @@ results_cifar100 = {"CIFAR100-Reed-2015": {0.0: (75.9, 76.1), 20.0: (62.0, 62.1)
                    "CIFAR100-Arazo-MDSH-2019": {0.0: (71.3, 73.3), 20.0: (73.4, 73.9), 50.0: (65.4, 66.1), 80.0: (35.4, 41.6), 90.0: (20.5, 24.3)}}
 
 model_types = list(all_results.keys())
-noise_levels = natsorted(list(all_results[model_types[0]].keys()))
+noise_levels = []
+for model_type in model_types:
+    noise_levels += list(all_results[model_type].keys())
+noise_levels = natsorted(np.unique(noise_levels))
+# noise_levels = natsorted(list(all_results[model_types[0]].keys()))
 print("Noise levels:", noise_levels)
 
 is_cifar100 = 'cifar100' in model_types[0].lower()
