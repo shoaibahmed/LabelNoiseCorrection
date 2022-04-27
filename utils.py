@@ -15,6 +15,7 @@ from sklearn import preprocessing as preprocessing
 import sys
 from tqdm import tqdm
 
+import cv2
 import kornia.augmentation
 
 ######################### Get data and noise adding ##########################
@@ -106,7 +107,7 @@ class AddGaussianNoise(object):
         self.mean = mean
     
     def __call__(self, tensor):
-        return torch.clip(tensor + torch.randn(tensor.size()) * self.std + self.mean, 0.0, 1.0)
+        return tensor + torch.randn(tensor.size()) * self.std + self.mean
 
 class ClampRangeTransform(object):
     def __init__(self, min_range, max_range):
@@ -124,12 +125,12 @@ def add_input_noise(x):
 
     max_val = x.abs().max()
     # print("Max val in image:", max_val)
-    noise_std = max_val * 0.2  # 10% of the maximum deviation
+    noise_std = max_val * 0.1  # 10% of the maximum deviation
     
     # Color jitter after normalization?
     corruption_transform = transforms.Compose([transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1),
                                                transforms.RandomApply([AddGaussianNoise(mean=0.0, std=noise_std)], p=0.5),
-                                               transforms.GaussianBlur(kernel_size=9, sigma=(0.1, 2.0)),
+                                               transforms.RandomApply([transforms.GaussianBlur(kernel_size=9, sigma=(0.1, 1.0))], p=0.5),
                                                ClampRangeTransform(0, 255)])
     
     x = corruption_transform(x)
@@ -157,18 +158,20 @@ def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform =
     images = [sample_i for sample_i in loader.sampler.data_source.data]
     probs_to_change = torch.randint(100, (len(noisy_labels),))
     idx_to_change = probs_to_change >= (100.0 - noise_percentage)
-
+    
     changed_idx = []
     for n, label_i in enumerate(noisy_labels):
         if idx_to_change[n] == 1:
             assert isinstance(images[n], np.ndarray)
             assert images[n].dtype == np.uint8
+            # cv2.imwrite("before_noise.png", cv2.resize(images[n], (224, 224)))
             
             # Augment the np array
             images[n] = add_input_noise_np(images[n])
             
             assert isinstance(images[n], np.ndarray)
             assert images[n].dtype == np.uint8
+            # cv2.imwrite("after_noise.png", cv2.resize(images[n], (224, 224)))
             
             changed_idx.append(n)
         

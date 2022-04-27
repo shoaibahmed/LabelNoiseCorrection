@@ -190,7 +190,7 @@ def main():
         
         print("!! Generating three different sets in the dataset...")
         # assert post_proc_transform is not None
-        assert args.noise_level == 25
+        assert args.noise_level <= 45
         noised_input_idx = add_input_noise_cifar_w(train_loader, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
         
         labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
