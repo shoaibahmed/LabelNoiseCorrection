@@ -822,7 +822,141 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
     return (loss_per_epoch, acc_train_per_epoch)
 
 
-##############################################################################
+##################### Leverage multiple probes simultaneously ####################
+
+
+def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=False):
+    assert std_lambda == 0.0 and not use_std, "Not implemented yet"
+    assert "noisy" in probes and "corrupted" in probes, list(probes.keys())
+    
+    with torch.no_grad():
+        model.eval()
+        outputs = model(data)
+        outputs = F.log_softmax(outputs, dim=1)
+        batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+        batch_losses.detach_()
+        outputs.detach_()
+        
+        # noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
+        # if use_std:
+        #     loss_mean = np.mean(noisy_stats["loss_vals"])
+        #     loss_std = np.std(noisy_stats["loss_vals"])
+        #     acc = noisy_stats["acc"]
+        #     assert len(noisy_stats["loss_vals"]) == len(probes["noisy_labels"]), f"{len(noisy_stats['loss_vals'])} != {len(probes['noisy_labels'])}"
+        #     current_loss_thresh = max(loss_mean + std_lambda * loss_std, 0.0)  # One standard deviation below the mean
+        #     print(f"Noisy probes (std. lambda: {std_lambda}) | Acc: {acc:.2f}% | Mean: {loss_mean:.4f} | Std: {loss_std:.4f} | Threshold: {current_loss_thresh:.4f}")
+        #     # current_loss_thresh = np.mean(noisy_stats["loss_vals"]) / 2.  # Half of the mean loss on the noisy probes -- assuming to split the loss into two sets
+        # else:
+        #     current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
+        
+        # Compute noisy probability
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
+        loss_mean = np.mean(noisy_stats["loss_vals"])
+        loss_var = np.var(noisy_stats["loss_vals"])
+        prob_mislabeled = 1 / (np.sqrt(2 * np.pi * loss_var)) * np.exp(-(batch_losses - loss_mean) / (2 * loss_var))
+        
+        # Compute corrupted probability
+        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"])
+        loss_mean = np.mean(corrupted_stats["loss_vals"])
+        loss_var = np.var(corrupted_stats["loss_vals"])
+        prob_corrupted = 1 / (np.sqrt(2 * np.pi * loss_var)) * np.exp(-(batch_losses - loss_mean) / (2 * loss_var))
+        
+        prob_clean = (2 - prob_mislabeled - prob_corrupted) / 2
+        combined_probs = np.stack([prob_clean, prob_corrupted, prob_mislabeled], axis=1)
+        assert combined_probs.shape == (len(prob_clean), 3)
+        
+        predicted_mode = np.argmax(combined_probs, axis=1)
+        assert predicted_mode.shape == (len(prob_clean),)
+        
+        model.train()
+        print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
+        return predicted_mode
+
+def train_mixUp_HardBootBeta_probes_multiclass(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
+    model.train()
+    loss_per_batch = []
+
+    acc_train_per_batch = []
+    correct = 0
+
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+
+        output_x1 = model(data)
+        output_x1.detach_()
+        optimizer.zero_grad()
+
+        inputs_mixed, targets_1, targets_2, lam, index = mixup_data_Boot(data, target, alpha, device)
+        output = model(inputs_mixed)
+        output_mean = F.softmax(output, dim=1)
+        tab_mean_class = torch.mean(output_mean,-2)
+        output = F.log_softmax(output, dim=1)
+
+        B = assign_probe_class(data, target, model, probes, std_lambda)
+        
+        # TODO: Compute losses in different ways
+        B = B.to(device)
+        # B[B <= 1e-4] = 1e-4
+        # B[B >= 1 - 1e-4] = 1 - 1e-4
+
+        output_x1 = F.log_softmax(output_x1, dim=1)
+        output_x2 = output_x1[index, :]
+        B2 = B[index]
+
+        z1 = torch.max(output_x1, dim=1)[1]
+        z2 = torch.max(output_x2, dim=1)[1]
+
+        # Original clean (ID == 0)
+        # loss_x1_vec = (1 - B) * F.nll_loss(output, targets_1, reduction='none')
+        loss_x1_vec = F.nll_loss(output[B == 0], targets_1[B == 0], reduction='none')
+        loss_x1 = torch.sum(loss_x1_vec) / len(loss_x1_vec)
+        
+        # Original noisy (ID == 2)
+        # loss_x1_pred_vec = B * F.nll_loss(output, z1, reduction='none')
+        # loss_x1_pred = torch.sum(loss_x1_pred_vec) / len(loss_x1_pred_vec)
+        loss_x1_pred_vec = F.nll_loss(output[B == 2], z1[B == 2], reduction='none')
+        loss_x1_pred = torch.sum(loss_x1_pred_vec) / len(output)
+
+        # Mixup clean (ID == 0)
+        # loss_x2_vec = (1 - B2) * F.nll_loss(output, targets_2, reduction='none')
+        # loss_x2 = torch.sum(loss_x2_vec) / len(loss_x2_vec)
+        loss_x2_vec = F.nll_loss(output[B2 == 0], targets_2[B2 == 0], reduction='none')
+        loss_x2 = torch.sum(loss_x2_vec) / len(output)
+
+        # Mixup noisy (ID == 2)
+        # loss_x2_pred_vec = B2 * F.nll_loss(output, z2, reduction='none')
+        # loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(loss_x2_pred_vec)
+        loss_x2_pred_vec = F.nll_loss(output[B2 == 2], z2[B2 == 2], reduction='none')
+        loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(output)
+
+        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
+
+        loss_reg = reg_loss_class(tab_mean_class, num_classes)
+        loss = loss + reg_term*loss_reg
+
+        loss.backward()
+
+        optimizer.step()
+        ################## monitor losses  ####################################
+        loss_per_batch.append(loss.item())
+        ########################################################################
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    return (loss_per_epoch, acc_train_per_epoch)
 
 
 ##################### Mixup Beta Soft Bootstrapping ####################

@@ -99,7 +99,9 @@ def main():
                         help="Use SSL training in conjuction with the CE loss -- specifically useful for noisy samples")
     
     parser.add_argument('--use-three-sets', default=False, action='store_true', 
-                        help="Use three sets in teh dataset")
+                        help="Use three sets in the dataset")
+    parser.add_argument('--treat-three-sets', default=False, action='store_true', 
+                        help="Treat and identify three sets in the dataset")
     
     parser.add_argument('--std-lambda', type=float, default=0., 
                         help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
@@ -187,10 +189,9 @@ def main():
     post_proc_transform = None
     if args.use_three_sets:
         # TODO: Ensure that the labels change and the input noise is mutually exclusive
-        
         print("!! Generating three different sets in the dataset...")
         # assert post_proc_transform is not None
-        assert args.noise_level <= 45
+        assert args.noise_level < 50.
         noised_input_idx = add_input_noise_cifar_w(train_loader, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
         
         labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
@@ -294,6 +295,10 @@ def main():
         else:
             print("Creating random examples with random labels as probe...")
             probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
+        
+        if args.treat_three_sets:
+            raise NotImplementedError
+            # TODO: Include another probe for the detection of the third set
         
         assert probes["noisy"].shape == (num_example_probes, *tensor_shape)
         probes["noisy"] = normalizer(probes["noisy"]).to(device)
