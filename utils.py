@@ -15,8 +15,11 @@ from sklearn import preprocessing as preprocessing
 import sys
 from tqdm import tqdm
 
+import os
 import cv2
 import kornia.augmentation
+
+from style_transfer import style_transfer
 
 ######################### Get data and noise adding ##########################
 def get_data_cifar(loader):
@@ -149,8 +152,9 @@ def add_input_noise_np(x):
     return x
 
 # Add input noise to the examples
-def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform = None):
+def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform = None, use_style_transfer = False, use_edge_detection = True):
     assert post_proc_transform is None
+    assert not (use_style_transfer and use_edge_detection)
     
     torch.manual_seed(2)
     np.random.seed(42)
@@ -159,19 +163,45 @@ def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform =
     probs_to_change = torch.randint(100, (len(noisy_labels),))
     idx_to_change = probs_to_change >= (100.0 - noise_percentage)
     
+    write_num_outputs = 5
+    iterator = 0
+    if use_style_transfer:
+        print("Using style transfer to generate input noise...")
+        style_root_dir = "./style_imgs/"
+        style_img_list = os.listdir(style_root_dir)
+        print("Total style images found:", len(style_img_list))
+        style_img_list = [os.path.join(style_root_dir, x) for x in style_img_list]
+        style_img_list = [cv2.resize(cv2.imread(x), (224, 224)) for x in style_img_list]
+    
     changed_idx = []
     for n, label_i in enumerate(noisy_labels):
         if idx_to_change[n] == 1:
             assert isinstance(images[n], np.ndarray)
             assert images[n].dtype == np.uint8
-            # cv2.imwrite("before_noise.png", cv2.resize(images[n], (224, 224)))
+            if iterator < write_num_outputs:
+                cv2.imwrite(f"before_noise_{iterator}.png", cv2.resize(images[n], (224, 224)))
             
             # Augment the np array
-            images[n] = add_input_noise_np(images[n])
+            if use_style_transfer:
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                style_img_idx = np.random.randint(len(style_img_list))
+                out = style_transfer(cv2.resize(images[n], (224, 224)), style_img_list[style_img_idx], device=device)
+                images[n] = cv2.resize(out, (32, 32))
+            elif use_edge_detection:
+                img = cv2.GaussianBlur(images[n], (1, 1), 0)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                # out = cv2.Canny(img, 20, 50)
+                out = cv2.Laplacian(img, cv2.CV_64F)
+                out = cv2.convertScaleAbs(out)
+                images[n] = np.stack([out, out, out], axis=2)
+            else:
+                images[n] = add_input_noise_np(images[n])
             
             assert isinstance(images[n], np.ndarray)
             assert images[n].dtype == np.uint8
-            # cv2.imwrite("after_noise.png", cv2.resize(images[n], (224, 224)))
+            if iterator < write_num_outputs:
+                cv2.imwrite(f"after_noise_{iterator}.png", cv2.resize(images[n], (224, 224)))
+                iterator += 1
             
             changed_idx.append(n)
         
@@ -180,7 +210,7 @@ def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform =
 
     loader.sampler.data_source.data = images
     loader.sampler.data_source.targets = noisy_labels
-
+    
     return changed_idx
 
 
