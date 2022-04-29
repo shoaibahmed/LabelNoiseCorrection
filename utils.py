@@ -20,6 +20,7 @@ import cv2
 import kornia.augmentation
 
 from style_transfer import style_transfer
+from stylized_cifar10.style_transfer_cifar import StyleTransfer
 
 ######################### Get data and noise adding ##########################
 def get_data_cifar(loader):
@@ -152,7 +153,7 @@ def add_input_noise_np(x):
     return x
 
 # Add input noise to the examples
-def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform = None, use_style_transfer = False, use_edge_detection = True):
+def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform = None, use_style_transfer = True, use_edge_detection = False):
     assert post_proc_transform is None
     assert not (use_style_transfer and use_edge_detection)
     
@@ -165,13 +166,16 @@ def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform =
     
     write_num_outputs = 5
     iterator = 0
+    style_transfer_cls = None
     if use_style_transfer:
         print("Using style transfer to generate input noise...")
         style_root_dir = "./style_imgs/"
         style_img_list = os.listdir(style_root_dir)
         print("Total style images found:", len(style_img_list))
         style_img_list = [os.path.join(style_root_dir, x) for x in style_img_list]
-        style_img_list = [cv2.resize(cv2.imread(x), (224, 224)) for x in style_img_list]
+        # style_img_list = [cv2.resize(cv2.imread(x), (224, 224)) for x in style_img_list]
+        style_img_list = [cv2.resize(cv2.imread(x), (32, 32)) for x in style_img_list]
+        style_transfer_cls = StyleTransfer()
     
     changed_idx = []
     for n, label_i in enumerate(noisy_labels):
@@ -185,7 +189,8 @@ def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform =
             if use_style_transfer:
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 style_img_idx = np.random.randint(len(style_img_list))
-                out = style_transfer(cv2.resize(images[n], (224, 224)), style_img_list[style_img_idx], device=device)
+                # out = style_transfer(cv2.resize(images[n], (224, 224)), style_img_list[style_img_idx], device=device)
+                out = style_transfer_cls.style_transfer(images[0], style_img_list[style_img_idx])
                 images[n] = cv2.resize(out, (32, 32))
             elif use_edge_detection:
                 img = cv2.GaussianBlur(images[n], (1, 1), 0)
