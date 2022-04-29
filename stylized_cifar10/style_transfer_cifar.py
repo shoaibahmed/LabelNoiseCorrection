@@ -13,15 +13,16 @@ from . import vgg_normalised
 
 
 class StyleTransfer:
-    def __init__(self):
-        self.vgg = self.load_vgg_model()
-        self.decoder = self.load_decoder_model()
-        self.adain = Adain.AdaptiveInstanceNormalization()
+    def __init__(self, device):
+        self.vgg = self.load_vgg_model().to(device)
+        self.decoder = self.load_decoder_model().to(device)
+        self.adain = Adain.AdaptiveInstanceNormalization(device).to(device)
+        self.device = device
 
     def style_transfer(self, style_img, content_img):
         """Style transfer between content image and style image."""
-        style_img = self.normalize_img(style_img)
-        content_img = self.normalize_img(content_img)
+        style_img = self.normalize_img(style_img).to(self.device)
+        content_img = self.normalize_img(content_img).to(self.device)
         
         style_feature = self.vgg(style_img)  # torch.Size([1, 512, 16, 16])
         content_feature = self.vgg(content_img)  # torch.Size([1, 512, 16, 16])
@@ -31,7 +32,7 @@ class StyleTransfer:
         alpha = 0.75
         target_feature = alpha * target_feature + (1 - alpha) * content_feature
         out = self.decoder(target_feature)
-        out = out.data.squeeze(0).permute(1, 2, 0).numpy()
+        out = out.data.cpu().squeeze(0).permute(1, 2, 0).numpy()
         out = np.clip(out * 255, 0, 255).astype(np.uint8)
         return out
     

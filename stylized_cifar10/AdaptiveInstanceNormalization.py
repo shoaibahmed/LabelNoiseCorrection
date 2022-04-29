@@ -10,7 +10,7 @@ from torch.nn.parameter import Parameter
 
 
 class AdaptiveInstanceNormalization(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, device):
         super(AdaptiveInstanceNormalization, self).__init__()
 
         self.gradInput = None
@@ -18,6 +18,7 @@ class AdaptiveInstanceNormalization(torch.nn.Module):
         self.nOutput = 512
         self.batchSize = -1
         self.bn = None
+        self.device = device
 
     def forward(self, input):
         """
@@ -39,7 +40,7 @@ class AdaptiveInstanceNormalization(torch.nn.Module):
         target_mean = torch.mean(style_view, 2, keepdim=False).view(-1)
 
         if self.bn is None:
-            self.bn = nn.BatchNorm2d(self.nOutput, self.eps, affine=False)
+            self.bn = nn.BatchNorm2d(self.nOutput, self.eps, affine=False).to(self.device)
 
         self.bn.weight = Parameter(target_std.data)
         self.bn.bias = Parameter(target_mean.data)
