@@ -11,6 +11,7 @@ import math
 import torchvision.models as models
 import random
 import os
+import shutil
 import numpy as np
 import pickle
 from matplotlib import pyplot as plt
@@ -144,23 +145,6 @@ def main():
         transforms.Normalize(mean, std),
     ])
 
-    # extra_transforms = [transforms.Normalize(mean, std)]
-    # post_proc_transform = None
-    # if args.use_three_sets:
-    #     post_proc_transform = extra_transforms[0]  # It should be an object, not a list
-    #     extra_transforms = []
-    #     print("Normalization transform removed from the list...")
-    
-    # transform_train = transforms.Compose([
-    #     transforms.RandomCrop(32, padding=4),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ToTensor(),
-    # ] + extra_transforms)
-
-    # transform_test = transforms.Compose([
-    #     transforms.ToTensor(),
-    # ] + extra_transforms)
-
     if args.dataset == 'CIFAR10':
         trainset = datasets.CIFAR10(root=args.root_dir, train=True, download=True, transform=transform_train)
         trainset_track = datasets.CIFAR10(root=args.root_dir, train=True, transform=transform_train)
@@ -187,6 +171,8 @@ def main():
 
     noised_input_idx = None
     post_proc_transform = None
+    available_indices = None
+    
     if args.use_three_sets:
         # TODO: Ensure that the labels change and the input noise is mutually exclusive
         print("!! Generating three different sets in the dataset...")
@@ -197,6 +183,9 @@ def main():
         labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
         noisy_labels, noised_label_idx = add_noise_cifar_w_new(train_loader, args.noise_level, noised_input_idx)  # it changes the labels in the train loader directly
         noisy_labels_track, noised_label_idx_track = add_noise_cifar_w_new(train_loader_track, args.noise_level, noised_input_idx)
+        
+        available_indices = [i for i in range(len(labels)) if i not in noised_input_idx and i not in noised_label_idx]
+        print("Number of available indices:", len(available_indices))
     
     else:
         print("!! Using the default label noise pipeline...")
@@ -231,7 +220,7 @@ def main():
             exit()
         else:
             # Remove the old directory and recreate it
-            os.rmdir(exp_path)
+            shutil.rmtree(exp_path)
             os.makedirs(exp_path)
             print("Recreated the output directory after deleting old results...")
     bmm_model=bmm_model_maxLoss=bmm_model_minLoss=cont=k = 0
@@ -296,20 +285,28 @@ def main():
             print("Creating random examples with random labels as probe...")
             probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
         
+        probe_list = ["noisy"]
         if args.treat_three_sets:
-            raise NotImplementedError
             # TODO: Include another probe for the detection of the third set
+            assert available_indices is not None
+            assert len(available_indices) > num_example_probes, f"Example probes: {num_example_probes} / Available indices: {len(available_indices)}"
+            np.random.choice(available_indices)
+            probes["corrupted"] = None
+            probe_list = ["noisy", "corrupted"]
         
-        assert probes["noisy"].shape == (num_example_probes, *tensor_shape)
-        probes["noisy"] = normalizer(probes["noisy"]).to(device)
-        probes["noisy_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
+        assert all([probes[k].shape == (num_example_probes, *tensor_shape) for k in probe_list])
+        for k in probe_list:
+            probes[k] = normalizer(probes[k]).to(device)
+            probes[f"{k}_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
         
-        probe_images = torch.cat([probes["noisy"]], dim=0)
-        probe_labels = torch.cat([probes["noisy_labels"]], dim=0)
+        probe_images = torch.cat([probes[k] for k in probe_list], dim=0)
+        probe_labels = torch.cat([probes[f"{k}_labels"] for k in probe_list], dim=0)
         probe_dataset_standard = CustomTensorDataset(probe_images.to("cpu"), [int(x) for x in probe_labels.to("cpu").numpy().tolist()])
         comb_trainset = torch.utils.data.ConcatDataset([trainset, probe_dataset_standard])
         
-        probe_identity = ["noisy_probe" for _ in range(len(probe_images))]
+        # probe_identity = ["noisy_probe" for _ in range(len(probe_images))]
+        probe_identity = [f"{k}_probe" for k in probe_list for _ in range(num_example_probes)]
+        assert len(probe_identity) == len(probe_images)
         dataset_probe_identity = ["train_noisy" if misclassified_instances[i] else "train_clean" for i in range(len(trainset))] + probe_identity
         assert len(dataset_probe_identity) == len(comb_trainset)
         print("Probe dataset:", len(comb_trainset), comb_trainset[0][0].shape)

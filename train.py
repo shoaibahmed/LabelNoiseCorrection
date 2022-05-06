@@ -11,6 +11,7 @@ import math
 import torchvision.models as models
 import random
 import os
+import shutil
 import numpy as np
 import pickle
 from matplotlib import pyplot as plt
@@ -217,7 +218,7 @@ def main():
             exit()
         else:
             # Remove the old directory and recreate it
-            os.rmdir(exp_path)
+            shutil.rmtree(exp_path)
             os.makedirs(exp_path)
             print("Recreated the output directory after deleting old results...")
     bmm_model=bmm_model_maxLoss=bmm_model_minLoss=cont=k = 0
