@@ -19,6 +19,8 @@ import os
 import cv2
 import kornia.augmentation
 
+import scipy.stats
+
 from style_transfer import style_transfer
 from stylized_cifar10.style_transfer_cifar import StyleTransfer
 
@@ -153,7 +155,8 @@ def add_input_noise_np(x):
     return x
 
 # Add input noise to the examples
-def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform = None, use_style_transfer = True, use_edge_detection = False):
+def add_input_noise_cifar_w(loader, noise_percentage=20, post_proc_transform=None, 
+                            use_style_transfer=False, use_edge_detection=False, use_random_inputs=True):
     assert post_proc_transform is None
     assert not (use_style_transfer and use_edge_detection)
     
@@ -202,6 +205,9 @@ def add_input_noise_cifar_w(loader, noise_percentage = 20, post_proc_transform =
                 out = cv2.Laplacian(img, cv2.CV_64F)
                 out = cv2.convertScaleAbs(out)
                 images[n] = np.stack([out, out, out], axis=2)
+            elif use_random_inputs:
+                random_img = np.clip(np.random.rand(32, 32, 3) * 255, 0, 255).astype(np.uint8)
+                images[n] = random_img
             else:
                 images[n] = add_input_noise_np(images[n])
             
@@ -873,7 +879,7 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         outputs = model(data)
         outputs = F.log_softmax(outputs, dim=1)
         batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
-        batch_losses.detach_()
+        batch_losses = batch_losses.detach_().cpu().numpy()
         outputs.detach_()
         
         # noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
@@ -891,16 +897,22 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         # Compute noisy probability
         noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
         loss_mean = np.mean(noisy_stats["loss_vals"])
-        loss_var = np.var(noisy_stats["loss_vals"])
-        prob_mislabeled = 1 / (np.sqrt(2 * np.pi * loss_var)) * np.exp(-(batch_losses - loss_mean) / (2 * loss_var))
+        loss_std = np.std(noisy_stats["loss_vals"])
+        # prob_mislabeled = scipy.stats.norm(loss_mean, loss_std).pdf(batch_losses)
+        mislabeled_dist = scipy.stats.norm(loss_mean, loss_std)
+        prob_mislabeled = mislabeled_dist.pdf(batch_losses)
+        prob_mislabeled_norm = prob_mislabeled / mislabeled_dist.pdf(loss_mean)
         
         # Compute corrupted probability
         corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"])
         loss_mean = np.mean(corrupted_stats["loss_vals"])
-        loss_var = np.var(corrupted_stats["loss_vals"])
-        prob_corrupted = 1 / (np.sqrt(2 * np.pi * loss_var)) * np.exp(-(batch_losses - loss_mean) / (2 * loss_var))
+        loss_std = np.std(corrupted_stats["loss_vals"])
+        # prob_corrupted = scipy.stats.norm(loss_mean, loss_std).pdf(batch_losses)
+        corrupted_dist = scipy.stats.norm(loss_mean, loss_std)
+        prob_corrupted = corrupted_dist.pdf(batch_losses)
+        prob_corrupted_norm = prob_corrupted / mislabeled_dist.pdf(corrupted_dist)
         
-        prob_clean = (2 - prob_mislabeled - prob_corrupted) / 2
+        prob_clean = (2 - prob_mislabeled_norm - prob_corrupted_norm) / 2
         combined_probs = np.stack([prob_clean, prob_corrupted, prob_mislabeled], axis=1)
         assert combined_probs.shape == (len(prob_clean), 3)
         
@@ -911,7 +923,7 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
         return predicted_mode
 
-def train_mixUp_HardBootBeta_probes_multiclass(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
+def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
     model.train()
     loss_per_batch = []
 

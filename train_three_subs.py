@@ -186,6 +186,9 @@ def main():
         
         available_indices = [i for i in range(len(labels)) if i not in noised_input_idx and i not in noised_label_idx]
         print("Number of available indices:", len(available_indices))
+        
+        # Three sets have to be: corrupted -> noisy ; noisy -> mislabaled
+        args.use_mislabeled_examples = True
     
     else:
         print("!! Using the default label noise pipeline...")
@@ -282,17 +285,28 @@ def main():
             print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
         
         else:
+            if args.treat_three_sets:
+                raise NotImplementedError("Definition of corrupted probe is ambiguous...")
             print("Creating random examples with random labels as probe...")
             probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
         
         probe_list = ["noisy"]
         if args.treat_three_sets:
+            assert args.use_mislabeled_examples, "Three sets only supports mislabeled probes for mislabeled example detection"
+            assert args.BootBeta == "HardProbes", "Only HardProbes is supported for three-set treatment"
+            
             # TODO: Include another probe for the detection of the third set
             assert available_indices is not None
             assert len(available_indices) > num_example_probes, f"Example probes: {num_example_probes} / Available indices: {len(available_indices)}"
-            np.random.choice(available_indices)
-            probes["corrupted"] = None
+            use_random_inputs = True  # Mislabeled examples are detected using mislabeled probe
+            if use_random_inputs:
+                probes["corrupted"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
+            else:
+                raise NotImplementedError
+                selected_indices = np.random.choice(available_indices, size=(num_example_probes,), replace=False)
+                # TODO: Random labels cannot be used in this case...
             probe_list = ["noisy", "corrupted"]
+            print("Corrupted probe included in the dataset for three-set treatment...")
         
         assert all([probes[k].shape == (num_example_probes, *tensor_shape) for k in probe_list])
         for k in probe_list:
@@ -414,9 +428,14 @@ def main():
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch,\
                                                                                      alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
                 if args.BootBeta == "HardProbes":
-                    print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
-                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader_w_probes, optimizer, epoch,\
-                                                                                     alpha, args.reg_term, num_classes, probes, args.std_lambda)
+                    if args.treat_three_sets:
+                        print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                        loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                                                                                        alpha, args.reg_term, num_classes, probes, args.std_lambda)
+                    else:
+                        print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                        loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                                                                                        alpha, args.reg_term, num_classes, probes, args.std_lambda)
                 elif args.BootBeta == "Soft":
                     print("\t##### Doing SOFT BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_SoftBootBeta(args, model, device, train_loader, optimizer, epoch, \
