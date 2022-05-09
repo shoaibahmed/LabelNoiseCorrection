@@ -968,8 +968,13 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         # loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(loss_x2_pred_vec)
         loss_x2_pred_vec = F.nll_loss(output[B2 == 2], z2[B2 == 2], reduction='none')
         loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(output)
+        
+        # Reduced loss on the noisy set
+        loss_corrupted_set_vec = F.nll_loss(output[B == 1], targets_1[B == 1], reduction='none')
+        loss_corrupted_set = torch.sum(loss_corrupted_set_vec) / len(loss_corrupted_set_vec)
 
-        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
+        corrupted_lambda = 0.1
+        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred) + corrupted_lambda * loss_corrupted_set
 
         loss_reg = reg_loss_class(tab_mean_class, num_classes)
         loss = loss + reg_term*loss_reg
@@ -1416,7 +1421,6 @@ class BetaMixture1D(object):
     def __str__(self):
         return 'BetaMixture1D(w={}, a={}, b={})'.format(self.weight, self.alphas, self.betas)
 
-
 class GaussianMixture1D(object):
     def __init__(self, num_modes):
         assert isinstance(num_modes, int)
@@ -1432,7 +1436,7 @@ class GaussianMixture1D(object):
         self.key_list = [None for _ in range(self.num_modes)]
     
     def likelihood(self, x, y):
-        return stats.norm.pdf(x, self.means[y], self.stds[y])
+        return scipy.stats.norm.pdf(x, self.means[y], self.stds[y])
 
     def weighted_likelihood(self, x, y):
         return self.weight[y] * self.likelihood(x, y)
@@ -1446,7 +1450,7 @@ class GaussianMixture1D(object):
     def score_samples(self, x):
         return -np.log(self.probability(x))
 
-    def fit(self, model: nn.Module, probes: dict, probe_class_map: dict):
+    def fit(self, model: torch.nn.Module, probes: dict, probe_class_map: dict):
         """
         Fit loss distribution for different probes
         :param probe_class_map should map from probe names to their actual label
@@ -1457,8 +1461,9 @@ class GaussianMixture1D(object):
         
         key_list = list(probe_class_map.keys())
         assert len(key_list) == self.num_modes
+        
         for k in key_list:
-            stats = test_tensor(model, probes[k], probes[f"{k}_labels"])
+            stats = test_tensor(model, probes[k], probes[f"{k}_labels"], msg=f"{k}_probe", return_loss_vals=True)
             loss_mean = np.mean(stats["loss_vals"])
             loss_std = np.std(stats["loss_vals"])
             # dist = scipy.stats.norm(loss_mean, loss_std)
@@ -1474,8 +1479,39 @@ class GaussianMixture1D(object):
         assert not any([k is None for k in self.stds])
         assert not any([k is None for k in self.key_list])
     
+    def fit_values(self, loss_dict: dict, probe_class_map: dict):
+        """
+        Fit loss distribution for different probes
+        :param probe_class_map should map from probe names to their actual label
+        """
+        self.means = [None for _ in range(self.num_modes)]
+        self.stds = [None for _ in range(self.num_modes)]
+        self.key_list = [None for _ in range(self.num_modes)]
+        
+        key_list = list(probe_class_map.keys())
+        assert len(key_list) == self.num_modes
+        
+        for k in key_list:
+            loss_vals = loss_dict[k]
+            loss_mean = np.mean(loss_vals)
+            loss_std = np.std(loss_vals)
+            
+            class_idx = probe_class_map[k]
+            self.key_list[class_idx] = k
+            assert 0 <= class_idx < self.num_modes
+            self.means[class_idx] = loss_mean
+            self.stds[class_idx] = loss_std
+            print(f"Class: {k} / Idx: {class_idx} / Loss mean: {loss_mean:.4f} / Loss std: {loss_std:.4f}")
+        
+        assert not any([k is None for k in self.means])
+        assert not any([k is None for k in self.stds])
+        assert not any([k is None for k in self.key_list])
+    
+    def get_probs(self, x):
+        return [self.posterior(x, i) for i in range(self.num_modes)]
+    
     def predict(self, x):
-        return np.argmax([self.posterior(x, i) for i in range(self.num_modes)])
+        return np.argmax(self.get_probs(x))
 
     def create_lookup(self, y):
         x_l = np.linspace(0+self.eps_nan, 1-self.eps_nan, self.lookup_resolution)
@@ -1498,4 +1534,4 @@ class GaussianMixture1D(object):
         plt.plot(x, self.probability(x), lw=2, label='mixture')
 
     def __str__(self):
-        return 'GaussianMixture1D(w={}, means={}, stds={})'.format(self.weight, self.means, self.stds)
+        return 'GaussianMixture1D(w={}, means={}, stds={}, classes={})'.format(self.weight, self.means, self.stds, self.key_list)
