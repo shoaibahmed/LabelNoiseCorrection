@@ -882,18 +882,6 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         batch_losses = batch_losses.detach_().cpu().numpy()
         outputs.detach_()
         
-        # noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
-        # if use_std:
-        #     loss_mean = np.mean(noisy_stats["loss_vals"])
-        #     loss_std = np.std(noisy_stats["loss_vals"])
-        #     acc = noisy_stats["acc"]
-        #     assert len(noisy_stats["loss_vals"]) == len(probes["noisy_labels"]), f"{len(noisy_stats['loss_vals'])} != {len(probes['noisy_labels'])}"
-        #     current_loss_thresh = max(loss_mean + std_lambda * loss_std, 0.0)  # One standard deviation below the mean
-        #     print(f"Noisy probes (std. lambda: {std_lambda}) | Acc: {acc:.2f}% | Mean: {loss_mean:.4f} | Std: {loss_std:.4f} | Threshold: {current_loss_thresh:.4f}")
-        #     # current_loss_thresh = np.mean(noisy_stats["loss_vals"]) / 2.  # Half of the mean loss on the noisy probes -- assuming to split the loss into two sets
-        # else:
-        #     current_loss_thresh = noisy_stats["loss"]  # average loss on the noisy probes
-        
         # Compute noisy probability
         noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
         loss_mean = np.mean(noisy_stats["loss_vals"])
@@ -910,7 +898,7 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         # prob_corrupted = scipy.stats.norm(loss_mean, loss_std).pdf(batch_losses)
         corrupted_dist = scipy.stats.norm(loss_mean, loss_std)
         prob_corrupted = corrupted_dist.pdf(batch_losses)
-        prob_corrupted_norm = prob_corrupted / mislabeled_dist.pdf(corrupted_dist)
+        prob_corrupted_norm = prob_corrupted / mislabeled_dist.pdf(loss_mean)
         
         prob_clean = (2 - prob_mislabeled_norm - prob_corrupted_norm) / 2
         combined_probs = np.stack([prob_clean, prob_corrupted, prob_mislabeled], axis=1)
@@ -921,7 +909,7 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         
         model.train()
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
-        return predicted_mode
+        return torch.from_numpy(predicted_mode)
 
 def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
     model.train()
@@ -1427,3 +1415,69 @@ class BetaMixture1D(object):
 
     def __str__(self):
         return 'BetaMixture1D(w={}, a={}, b={})'.format(self.weight, self.alphas, self.betas)
+
+
+class GaussianMixture1D(object):
+    def __init__(self, num_modes):
+        assert isinstance(num_modes, int)
+        self.num_modes = num_modes
+        self.weight = np.array([1. / self.num_modes for _ in range(num_modes)])
+        self.lookup = np.zeros(100, dtype=np.float64)
+        self.lookup_resolution = 100
+        self.lookup_loss = np.zeros(100, dtype=np.float64)
+        self.eps_nan = 1e-12
+        
+        raise NotImplementedError
+
+    def likelihood(self, x, y):
+        return stats.norm.pdf(x, self.means[y], self.stds[y])
+
+    def weighted_likelihood(self, x, y):
+        return self.weight[y] * self.likelihood(x, y)
+
+    def probability(self, x):
+        return sum(self.weighted_likelihood(x, y) for y in range(2))
+
+    def posterior(self, x, y):
+        return self.weighted_likelihood(x, y) / (self.probability(x) + self.eps_nan)
+
+    def responsibilities(self, x):
+        r =  np.array([self.weighted_likelihood(x, i) for i in range(2)])
+        # there are ~200 samples below that value
+        r[r <= self.eps_nan] = self.eps_nan
+        r /= r.sum(axis=0)
+        return r
+
+    def score_samples(self, x):
+        return -np.log(self.probability(x))
+
+    def fit(self, probes):
+        # fit loss distribution for different probes
+        
+        raise NotImplementedError
+    
+    def predict(self, x):
+        return self.posterior(x, 1) > 0.5
+
+    def create_lookup(self, y):
+        x_l = np.linspace(0+self.eps_nan, 1-self.eps_nan, self.lookup_resolution)
+        lookup_t = self.posterior(x_l, y)
+        lookup_t[np.argmax(lookup_t):] = lookup_t.max()
+        self.lookup = lookup_t
+        self.lookup_loss = x_l # I do not use this one at the end
+
+    def look_lookup(self, x, loss_max, loss_min):
+        x_i = x.clone().cpu().numpy()
+        x_i = np.array((self.lookup_resolution * x_i).astype(int))
+        x_i[x_i < 0] = 0
+        x_i[x_i == self.lookup_resolution] = self.lookup_resolution - 1
+        return self.lookup[x_i]
+
+    def plot(self):
+        x = np.linspace(0, 1, 100)
+        plt.plot(x, self.weighted_likelihood(x, 0), label='negative')
+        plt.plot(x, self.weighted_likelihood(x, 1), label='positive')
+        plt.plot(x, self.probability(x), lw=2, label='mixture')
+
+    def __str__(self):
+        return 'GaussianMixture1D(w={}, means={}, stds={})'.format(self.weight, self.means, self.stds)
