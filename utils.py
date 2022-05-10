@@ -950,8 +950,10 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
     acc_train_per_batch = []
     correct = 0
     gmm = None
-    update_gmm_every_iter = True
-    reweight_loss = True
+    update_gmm_every_iter = False
+    reweight_loss = False
+    adaptive_reweighting = False
+    use_flooding = False
 
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -1011,6 +1013,14 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         loss_x2_pred_vec = F.nll_loss(output[B2 == 2], z2[B2 == 2], reduction='none')
         loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(output)
         
+        if use_flooding:
+            raise NotImplementedError
+        
+            # Apply flooding loss on third set
+            batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+            loss_thresh = torch.zeros_like(batch_losses)
+            loss_thresh = batch_losses[B == 1]
+        
         # # Reduced loss on the noisy set
         # loss_corrupted_set_vec = F.nll_loss(output[B == 1], targets_1[B == 1], reduction='none')
         # loss_corrupted_set = torch.sum(loss_corrupted_set_vec) / len(loss_corrupted_set_vec)
@@ -1019,12 +1029,20 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         # loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)# + corrupted_lambda * loss_corrupted_set
         
         if reweight_loss:
-            print(f"Fraction of clean ex: {frac_clean_ex} / Fraction of corrupted ex: {frac_corrupted_ex} / Fraction of noisy ex: {frac_noisy_ex}")
-            loss_x1_reweight = (1. / frac_clean_ex) * loss_x1
-            loss_x2_reweight = (1. / frac_clean_ex) * loss_x2
-            
-            loss_x1_pred_reweight = (1. / frac_noisy_ex) * loss_x1_pred
-            loss_x2_pred_reweight = (1. / frac_noisy_ex) * loss_x2_pred
+            if adaptive_reweighting:
+                print(f"Fraction of clean ex: {frac_clean_ex} / Fraction of corrupted ex: {frac_corrupted_ex} / Fraction of noisy ex: {frac_noisy_ex}")
+                
+                loss_x1_reweight = (1. / frac_clean_ex) * loss_x1
+                loss_x2_reweight = (1. / frac_clean_ex) * loss_x2
+                
+                loss_x1_pred_reweight = (1. / frac_noisy_ex) * loss_x1_pred
+                loss_x2_pred_reweight = (1. / frac_noisy_ex) * loss_x2_pred
+            else:
+                loss_x1_reweight = 10. * loss_x1
+                loss_x2_reweight = 10. * loss_x2
+                
+                loss_x1_pred_reweight = 1. * loss_x1_pred
+                loss_x2_pred_reweight = 1. * loss_x2_pred
             
             loss = lam*(loss_x1_reweight + loss_x1_pred_reweight) + (1-lam)*(loss_x2_reweight + loss_x2_pred_reweight)
             print(f"Original loss: {loss_x1}/{loss_x2} / Upweighted loss: {loss_x1_reweight}/{loss_x2_reweight}")
