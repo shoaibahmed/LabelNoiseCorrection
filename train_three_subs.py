@@ -263,9 +263,13 @@ def main():
         num_example_probes = 250  # 0.5% of the dataset
         normalizer = transforms.Normalize(mean, std)
         
+        indices_to_remove = []
         if args.use_mislabeled_examples:
             print("Using examples from the dataset with random labels as probe...")
-            selected_indices = np.random.choice(np.arange(len(trainset)), size=num_example_probes, replace=False)
+            
+            assert available_indices is not None
+            assert len(available_indices) > num_example_probes, f"Example probes: {num_example_probes} / Available indices: {len(available_indices)}"
+            selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
             assert len(np.unique(selected_indices)) == len(selected_indices)
             
             transforms_clean = transforms.ToTensor()
@@ -273,16 +277,20 @@ def main():
             probes["noisy"] = torch.stack([transforms_clean(x) for x in images], dim=0)
             print("Selected image shape:", probes["noisy"].shape)
             
-            # Remove these examples from the dataset
-            print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
-            num_total_examples = len(trainset)
-            trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in selected_indices]
-            trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in selected_indices]
-            misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in selected_indices]
+            # Update available indices
+            available_indices = [i for i in available_indices if i not in selected_indices]
             
-            # Reinitialize the dataloader to generate the right indices for sampler
-            train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
-            print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+            # # Remove these examples from the dataset
+            # print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+            # num_total_examples = len(trainset)
+            # trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in selected_indices]
+            # trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in selected_indices]
+            # misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in selected_indices]
+            
+            # # Reinitialize the dataloader to generate the right indices for sampler
+            # train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+            # print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+            indices_to_remove += [i for i in selected_indices]
         
         else:
             if args.treat_three_sets:
@@ -305,13 +313,41 @@ def main():
                 raise NotImplementedError
                 selected_indices = np.random.choice(available_indices, size=(num_example_probes,), replace=False)
                 # TODO: Random labels cannot be used in this case...
-            probe_list = ["noisy", "corrupted"]
+            
+            # probes["mislabeled"] = probes["noisy"]  # Rename the probe for clarity
+            probe_list = ["noisy", "corrupted", "typical"]
+            random_gen_labels = ["noisy", "corrupted"]
             print("Corrupted probe included in the dataset for three-set treatment...")
+            
+            print("Using examples from the dataset with original labels as typical probe...")
+            selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
+            assert len(np.unique(selected_indices)) == len(selected_indices)
+            
+            images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
+            probes["typical"] = torch.stack([transforms_clean(x) for x in images], dim=0)
+            probes[f"typical_labels"] = torch.tensor([train_loader.sampler.data_source.targets[i] for i in selected_indices], dtype=torch.int64).to(device)
+            print("Selected image shape:", probes["typical"].shape)
+            
+            indices_to_remove += [i for i in selected_indices]
+            
+        if len(indices_to_remove) > 0:
+            # Remove these examples from the dataset
+            print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+            num_total_examples = len(trainset)
+            trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in indices_to_remove]
+            trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in indices_to_remove]
+            misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in indices_to_remove]
+            
+            # Reinitialize the dataloader to generate the right indices for sampler
+            train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+            print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
         
         assert all([probes[k].shape == (num_example_probes, *tensor_shape) for k in probe_list])
         for k in probe_list:
             probes[k] = normalizer(probes[k]).to(device)
-            probes[f"{k}_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
+            if k in random_gen_labels:
+                print("Generating random labels for:", k)
+                probes[f"{k}_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
         
         probe_images = torch.cat([probes[k] for k in probe_list], dim=0)
         probe_labels = torch.cat([probes[f"{k}_labels"] for k in probe_list], dim=0)

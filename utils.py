@@ -870,7 +870,7 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
 ##################### Leverage multiple probes simultaneously ####################
 
 
-def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=False):
+def assign_probe_class_deprecated(data, target, model, probes, std_lambda=0.0, use_std=False):
     assert std_lambda == 0.0 and not use_std, "Not implemented yet"
     assert "noisy" in probes and "corrupted" in probes, list(probes.keys())
     
@@ -906,6 +906,37 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         
         predicted_mode = np.argmax(combined_probs, axis=1)
         assert predicted_mode.shape == (len(prob_clean),)
+        
+        model.train()
+        print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
+        return torch.from_numpy(predicted_mode)
+
+def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=False):
+    assert std_lambda == 0.0 and not use_std, "Not implemented yet"
+    assert "noisy" in probes and "corrupted" in probes, list(probes.keys())
+    
+    with torch.no_grad():
+        model.eval()
+        outputs = model(data)
+        outputs = F.log_softmax(outputs, dim=1)
+        batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+        batch_losses = batch_losses.detach_().cpu().numpy()
+        outputs.detach_()
+        
+        # Compute noisy probability
+        probe_types = ["typical", "corrupted", "noisy"]
+        loss_stats = {}
+        for probe in probe_types:
+            stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])
+            loss_stats[probe] = stats["loss_vals"]
+        probe_class_map = {k: i for i, k in enumerate(probe_types)}
+        
+        # Fit the GMM distributions based on the loss values
+        gmm = GaussianMixture1D(num_modes=len(probe_class_map))
+        gmm.fit_values(loss_stats, probe_class_map)
+        print(gmm)
+        
+        predicted_mode = np.array([gmm.predict(float(x)) for x in batch_losses])
         
         model.train()
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
@@ -969,12 +1000,12 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         loss_x2_pred_vec = F.nll_loss(output[B2 == 2], z2[B2 == 2], reduction='none')
         loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(output)
         
-        # Reduced loss on the noisy set
-        loss_corrupted_set_vec = F.nll_loss(output[B == 1], targets_1[B == 1], reduction='none')
-        loss_corrupted_set = torch.sum(loss_corrupted_set_vec) / len(loss_corrupted_set_vec)
+        # # Reduced loss on the noisy set
+        # loss_corrupted_set_vec = F.nll_loss(output[B == 1], targets_1[B == 1], reduction='none')
+        # loss_corrupted_set = torch.sum(loss_corrupted_set_vec) / len(loss_corrupted_set_vec)
 
         corrupted_lambda = 0.1
-        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred) + corrupted_lambda * loss_corrupted_set
+        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)# + corrupted_lambda * loss_corrupted_set
 
         loss_reg = reg_loss_class(tab_mean_class, num_classes)
         loss = loss + reg_term*loss_reg
