@@ -911,9 +911,8 @@ def assign_probe_class_deprecated(data, target, model, probes, std_lambda=0.0, u
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
         return torch.from_numpy(predicted_mode)
 
-def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=False):
-    assert std_lambda == 0.0 and not use_std, "Not implemented yet"
-    assert "noisy" in probes and "corrupted" in probes, list(probes.keys())
+def assign_probe_class(data, target, model, probes, gmm=None):
+    assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
     
     with torch.no_grad():
         model.eval()
@@ -923,24 +922,26 @@ def assign_probe_class(data, target, model, probes, std_lambda=0.0, use_std=Fals
         batch_losses = batch_losses.detach_().cpu().numpy()
         outputs.detach_()
         
-        # Compute noisy probability
-        probe_types = ["typical", "corrupted", "noisy"]
-        loss_stats = {}
-        for probe in probe_types:
-            stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])
-            loss_stats[probe] = stats["loss_vals"]
-        probe_class_map = {k: i for i, k in enumerate(probe_types)}
-        
-        # Fit the GMM distributions based on the loss values
-        gmm = GaussianMixture1D(num_modes=len(probe_class_map))
-        gmm.fit_values(loss_stats, probe_class_map)
-        print(gmm)
+        if gmm is None:
+            # Compute noisy probability
+            print("Recomputing probe values...")
+            probe_types = ["typical", "corrupted", "noisy"]
+            loss_stats = {}
+            for probe in probe_types:
+                stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])
+                loss_stats[probe] = stats["loss_vals"]
+            probe_class_map = {k: i for i, k in enumerate(probe_types)}
+            
+            # Fit the GMM distributions based on the loss values
+            gmm = GaussianMixture1D(num_modes=len(probe_class_map))
+            gmm.fit_values(loss_stats, probe_class_map)
+            print(gmm)
         
         predicted_mode = np.array([gmm.predict(float(x)) for x in batch_losses])
         
         model.train()
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
-        return torch.from_numpy(predicted_mode)
+        return torch.from_numpy(predicted_mode), gmm
 
 def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
     model.train()
@@ -948,6 +949,7 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
 
     acc_train_per_batch = []
     correct = 0
+    gmm = None
 
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -963,7 +965,7 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B = assign_probe_class(data, target, model, probes, std_lambda)
+        B, gmm = assign_probe_class(data, target, model, probes, gmm)
         
         # TODO: Compute losses in different ways
         B = B.to(device)
