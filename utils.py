@@ -950,6 +950,8 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
     acc_train_per_batch = []
     correct = 0
     gmm = None
+    update_gmm_every_iter = True
+    reweight_loss = True
 
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -966,6 +968,8 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         output = F.log_softmax(output, dim=1)
 
         B, gmm = assign_probe_class(data, target, model, probes, gmm)
+        if update_gmm_every_iter:
+            gmm = None
         
         # TODO: Compute losses in different ways
         B = B.to(device)
@@ -975,6 +979,11 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         output_x1 = F.log_softmax(output_x1, dim=1)
         output_x2 = output_x1[index, :]
         B2 = B[index]
+        
+        # Calculate number of examples from each of these sets for normalization
+        frac_clean_ex = (B == 0).sum() / len(B)
+        frac_noisy_ex = (B == 2).sum() / len(B)
+        frac_corrupted_ex = (B == 1).sum() / len(B)
 
         z1 = torch.max(output_x1, dim=1)[1]
         z2 = torch.max(output_x2, dim=1)[1]
@@ -1006,8 +1015,21 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         # loss_corrupted_set_vec = F.nll_loss(output[B == 1], targets_1[B == 1], reduction='none')
         # loss_corrupted_set = torch.sum(loss_corrupted_set_vec) / len(loss_corrupted_set_vec)
 
-        corrupted_lambda = 0.1
-        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)# + corrupted_lambda * loss_corrupted_set
+        # corrupted_lambda = 0.1
+        # loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)# + corrupted_lambda * loss_corrupted_set
+        
+        if reweight_loss:
+            print(f"Fraction of clean ex: {frac_clean_ex} / Fraction of corrupted ex: {frac_corrupted_ex} / Fraction of noisy ex: {frac_noisy_ex}")
+            loss_x1_reweight = (1. / frac_clean_ex) * loss_x1
+            loss_x2_reweight = (1. / frac_clean_ex) * loss_x2
+            
+            loss_x1_pred_reweight = (1. / frac_noisy_ex) * loss_x1_pred
+            loss_x2_pred_reweight = (1. / frac_noisy_ex) * loss_x2_pred
+            
+            loss = lam*(loss_x1_reweight + loss_x1_pred_reweight) + (1-lam)*(loss_x2_reweight + loss_x2_pred_reweight)
+            print(f"Original loss: {loss_x1}/{loss_x2} / Upweighted loss: {loss_x1_reweight}/{loss_x2_reweight}")
+        else:
+            loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
 
         loss_reg = reg_loss_class(tab_mean_class, num_classes)
         loss = loss + reg_term*loss_reg
