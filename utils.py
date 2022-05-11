@@ -926,6 +926,7 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm)
         if update_model_every_iter:
             prob_model.fit(model, probes)
+            print(prob_model)
         
         # TODO: Compute losses in different ways
         B = B.to(device)
@@ -1025,8 +1026,12 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
                        100. * correct / ((batch_idx + 1) * args.batch_size),
                 optimizer.param_groups[0]['lr']))
 
-    # Update the mixture weights
+    # Update the mixture weights based on the collected loss values
     prob_model.update_mixture_weights()
+    
+    # Update the model itself
+    prob_model.fit(model, probes)
+    print(prob_model)
 
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
