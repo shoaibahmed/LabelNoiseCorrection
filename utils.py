@@ -889,9 +889,8 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True):
             prob_model.fit(model, probes)
             print("Probability model:", prob_model)
         
-        if not use_gmm:  # Append the loss values for updating the mixture weights
-            assert isinstance(prob_model, MultiModalBetaMixture1D)
-            prob_model.add_loss_vals(batch_losses)
+        # Append the loss values for updating the mixture weights
+        prob_model.add_loss_vals(batch_losses)
         
         predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
         
@@ -1026,9 +1025,8 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
                        100. * correct / ((batch_idx + 1) * args.batch_size),
                 optimizer.param_groups[0]['lr']))
 
-    if not use_gmm:  # Update the mixture weights
-        assert isinstance(prob_model, MultiModalBetaMixture1D)
-        prob_model.update_mixture_weights()
+    # Update the mixture weights
+    prob_model.update_mixture_weights()
 
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
@@ -1455,7 +1453,7 @@ class BetaMixture1D(object):
 
 
 class MultiModalBetaMixture1D(object):
-    def __init__(self, num_modes: int):
+    def __init__(self, num_modes: int, learn_mixture_weights: bool=True):
         assert isinstance(num_modes, int)
         self.num_modes = num_modes
         self.weight = np.array([1. / self.num_modes for _ in range(num_modes)])
@@ -1463,6 +1461,7 @@ class MultiModalBetaMixture1D(object):
         self.lookup_resolution = 100
         self.lookup_loss = np.zeros(100, dtype=np.float64)
         self.eps_nan = 1e-12
+        self.learn_mixture_weights = learn_mixture_weights
         
         self.alphas = [None for _ in range(self.num_modes)]
         self.betas = [None for _ in range(self.num_modes)]
@@ -1473,17 +1472,19 @@ class MultiModalBetaMixture1D(object):
         self.loss_list.append(loss_vals)
     
     def update_mixture_weights(self):
-        losses = np.concatenate(self.loss_list, axis=0)
-        assert len(losses.shape) == 1
-        print("Losses shape before update:", losses.shape)
+        if self.learn_mixture_weights:
+            losses = np.concatenate(self.loss_list, axis=0)
+            assert len(losses.shape) == 1
+            print("Losses shape before update:", losses.shape)
+            
+            # Recompute the mixture weights
+            print("Mixture weights before update:", self.weight)
+            r = self.responsibilities(losses)
+            self.weight = r.sum(axis=1)
+            self.weight /= self.weight.sum()
+            print("Mixture weights after update:", self.weight)
         
-        # Recompute the mixture weights
-        print("Mixture weights before update:", self.weight)
-        r = self.responsibilities(losses)
-        self.weight = r.sum(axis=1)
-        self.weight /= self.weight.sum()
-        print("Mixture weights after update:", self.weight)
-        
+        # Reset the loss list
         self.loss_list = []
 
     def likelihood(self, x, y):
@@ -1500,7 +1501,6 @@ class MultiModalBetaMixture1D(object):
 
     def responsibilities(self, x):
         r =  np.array([self.weighted_likelihood(x, i) for i in range(self.num_modes)])
-        # there are ~200 samples below that value
         r[r <= self.eps_nan] = self.eps_nan
         r /= r.sum(axis=0)
         return r
@@ -1581,7 +1581,7 @@ class MultiModalBetaMixture1D(object):
 
 
 class GaussianMixture1D(object):
-    def __init__(self, num_modes: int):
+    def __init__(self, num_modes: int, learn_mixture_weights: bool=True):
         assert isinstance(num_modes, int)
         self.num_modes = num_modes
         self.weight = np.array([1. / self.num_modes for _ in range(num_modes)])
@@ -1589,10 +1589,31 @@ class GaussianMixture1D(object):
         self.lookup_resolution = 100
         self.lookup_loss = np.zeros(100, dtype=np.float64)
         self.eps_nan = 1e-12
+        self.learn_mixture_weights = learn_mixture_weights
         
         self.means = [None for _ in range(self.num_modes)]
         self.stds = [None for _ in range(self.num_modes)]
         self.key_list = [None for _ in range(self.num_modes)]
+        self.loss_list = []
+
+    def add_loss_vals(self, loss_vals: np.ndarray):
+        self.loss_list.append(loss_vals)
+    
+    def update_mixture_weights(self):
+        if self.learn_mixture_weights:
+            losses = np.concatenate(self.loss_list, axis=0)
+            assert len(losses.shape) == 1
+            print("Losses shape before update:", losses.shape)
+            
+            # Recompute the mixture weights
+            print("Mixture weights before update:", self.weight)
+            r = self.responsibilities(losses)
+            self.weight = r.sum(axis=1)
+            self.weight /= self.weight.sum()
+            print("Mixture weights after update:", self.weight)
+        
+        # Reset the loss list
+        self.loss_list = []
     
     def likelihood(self, x, y):
         return scipy.stats.norm.pdf(x, self.means[y], self.stds[y])
@@ -1605,6 +1626,12 @@ class GaussianMixture1D(object):
 
     def posterior(self, x, y):
         return self.weighted_likelihood(x, y) / (self.probability(x) + self.eps_nan)
+
+    def responsibilities(self, x):
+        r =  np.array([self.weighted_likelihood(x, i) for i in range(self.num_modes)])
+        r[r <= self.eps_nan] = self.eps_nan
+        r /= r.sum(axis=0)
+        return r
 
     def score_samples(self, x):
         return -np.log(self.probability(x))
