@@ -103,6 +103,8 @@ def main():
                         help="Use three sets in the dataset")
     parser.add_argument('--treat-three-sets', default=False, action='store_true', 
                         help="Treat and identify three sets in the dataset")
+    parser.add_argument('--use-bmm-treatment', default=False, action='store_true', 
+                        help="Use BMM to treat these three sets as compared to a GMM")
     
     parser.add_argument('--std-lambda', type=float, default=0., 
                         help="Parameter of the probes std dev to be used for adjusting the threshold value, default: 0.")
@@ -374,6 +376,7 @@ def main():
 
     probe_detection_list = []
     bmm_detection_list = []
+    prob_model = None
 
     for epoch in range(1, args.epochs + 1):
         # train
@@ -467,8 +470,8 @@ def main():
                 if args.BootBeta == "HardProbes":
                     if args.treat_three_sets:
                         print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
-                        loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
-                                                                                        alpha, args.reg_term, num_classes, probes, args.std_lambda)
+                        loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                                                                                        alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment)
                     else:
                         print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader_w_probes, optimizer, epoch,\

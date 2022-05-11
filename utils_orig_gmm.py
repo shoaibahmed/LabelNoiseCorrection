@@ -870,7 +870,48 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
 ##################### Leverage multiple probes simultaneously ####################
 
 
-def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True):
+def assign_probe_class_deprecated(data, target, model, probes, std_lambda=0.0, use_std=False):
+    assert std_lambda == 0.0 and not use_std, "Not implemented yet"
+    assert "noisy" in probes and "corrupted" in probes, list(probes.keys())
+    
+    with torch.no_grad():
+        model.eval()
+        outputs = model(data)
+        outputs = F.log_softmax(outputs, dim=1)
+        batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+        batch_losses = batch_losses.detach_().cpu().numpy()
+        outputs.detach_()
+        
+        # Compute noisy probability
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"])
+        loss_mean = np.mean(noisy_stats["loss_vals"])
+        loss_std = np.std(noisy_stats["loss_vals"])
+        # prob_mislabeled = scipy.stats.norm(loss_mean, loss_std).pdf(batch_losses)
+        mislabeled_dist = scipy.stats.norm(loss_mean, loss_std)
+        prob_mislabeled = mislabeled_dist.pdf(batch_losses)
+        prob_mislabeled_norm = prob_mislabeled / mislabeled_dist.pdf(loss_mean)
+        
+        # Compute corrupted probability
+        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"])
+        loss_mean = np.mean(corrupted_stats["loss_vals"])
+        loss_std = np.std(corrupted_stats["loss_vals"])
+        # prob_corrupted = scipy.stats.norm(loss_mean, loss_std).pdf(batch_losses)
+        corrupted_dist = scipy.stats.norm(loss_mean, loss_std)
+        prob_corrupted = corrupted_dist.pdf(batch_losses)
+        prob_corrupted_norm = prob_corrupted / mislabeled_dist.pdf(loss_mean)
+        
+        prob_clean = (2 - prob_mislabeled_norm - prob_corrupted_norm) / 2
+        combined_probs = np.stack([prob_clean, prob_corrupted, prob_mislabeled], axis=1)
+        assert combined_probs.shape == (len(prob_clean), 3)
+        
+        predicted_mode = np.argmax(combined_probs, axis=1)
+        assert predicted_mode.shape == (len(prob_clean),)
+        
+        model.train()
+        print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
+        return torch.from_numpy(predicted_mode)
+
+def assign_probe_class(data, target, model, probes, gmm=None):
     assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
     
     with torch.no_grad():
@@ -881,31 +922,35 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True):
         batch_losses = batch_losses.detach_().cpu().numpy()
         outputs.detach_()
         
-        if prob_model is None:
-            if use_gmm:
-                prob_model = GaussianMixture1D(num_modes=3)
-            else:
-                prob_model = MultiModalBetaMixture1D(num_modes=3)
-            prob_model.fit(model, probes)
-            print("Probability model:", prob_model)
+        if gmm is None:
+            # Compute noisy probability
+            print("Recomputing probe values...")
+            probe_types = ["typical", "corrupted", "noisy"]
+            loss_stats = {}
+            for probe in probe_types:
+                stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])
+                loss_stats[probe] = stats["loss_vals"]
+            probe_class_map = {k: i for i, k in enumerate(probe_types)}
+            
+            # Fit the GMM distributions based on the loss values
+            gmm = GaussianMixture1D(num_modes=len(probe_class_map))
+            gmm.fit_values(loss_stats, probe_class_map)
+            print(gmm)
         
-        if not use_gmm:  # Append the loss values for updating the mixture weights
-            assert isinstance(prob_model, MultiModalBetaMixture1D)
-            prob_model.add_loss_vals(batch_losses)
-        
-        predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
+        predicted_mode = np.array([gmm.predict(float(x)) for x in batch_losses])
         
         model.train()
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
-        return torch.from_numpy(predicted_mode), prob_model
+        return torch.from_numpy(predicted_mode), gmm
 
-def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, use_gmm):
+def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, std_lambda):
     model.train()
     loss_per_batch = []
 
     acc_train_per_batch = []
     correct = 0
-    update_model_every_iter = False
+    gmm = None
+    update_gmm_every_iter = False
     reweight_loss = False
     adaptive_reweighting = False
     use_flooding = False
@@ -924,9 +969,9 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm)
-        if update_model_every_iter:
-            prob_model.fit(model, probes)
+        B, gmm = assign_probe_class(data, target, model, probes, gmm)
+        if update_gmm_every_iter:
+            gmm = None
         
         # TODO: Compute losses in different ways
         B = B.to(device)
@@ -1026,13 +1071,9 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
                        100. * correct / ((batch_idx + 1) * args.batch_size),
                 optimizer.param_groups[0]['lr']))
 
-    if not use_gmm:  # Update the mixture weights
-        assert isinstance(prob_model, MultiModalBetaMixture1D)
-        prob_model.update_mixture_weights()
-
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
-    return (loss_per_epoch, acc_train_per_epoch, prob_model)
+    return (loss_per_epoch, acc_train_per_epoch)
 
 
 ##################### Mixup Beta Soft Bootstrapping ####################
@@ -1467,24 +1508,6 @@ class MultiModalBetaMixture1D(object):
         self.alphas = [None for _ in range(self.num_modes)]
         self.betas = [None for _ in range(self.num_modes)]
         self.key_list = [None for _ in range(self.num_modes)]
-        self.loss_list = []
-    
-    def add_loss_vals(self, loss_vals: np.ndarray):
-        self.loss_list.append(loss_vals)
-    
-    def update_mixture_weights(self):
-        losses = np.concatenate(self.loss_list, axis=0)
-        assert len(losses.shape) == 1
-        print("Losses shape before update:", losses.shape)
-        
-        # Recompute the mixture weights
-        print("Mixture weights before update:", self.weights)
-        r = self.responsibilities(losses)
-        self.weight = r.sum(axis=1)
-        self.weight /= self.weight.sum()
-        print("Mixture weights after update:", self.weights)
-        
-        self.loss_list = []
 
     def likelihood(self, x, y):
         return stats.beta.pdf(x, self.alphas[y], self.betas[y])
@@ -1508,22 +1531,40 @@ class MultiModalBetaMixture1D(object):
     def score_samples(self, x):
         return -np.log(self.probability(x))
 
-    def fit(self, model: torch.nn.Module, probes: dict):
+    def fit(self, model: torch.nn.Module, probes: dict, probe_class_map: dict):
         """
         Fit loss distribution for different probes
-        """        
-        probe_types = ["typical", "corrupted", "noisy"]
-        loss_stats = {}
-        for probe in probe_types:
-            stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])
-            loss_stats[probe] = stats["loss_vals"]
-        probe_class_map = {k: i for i, k in enumerate(probe_types)}
+        :param probe_class_map should map from probe names to their actual label
+        """
+        raise NotImplementedError("Need to correctly use the computed loss values")
+
+        self.means = [None for _ in range(self.num_modes)]
+        self.stds = [None for _ in range(self.num_modes)]
+        self.key_list = [None for _ in range(self.num_modes)]
         
-        # Fit the BMM distributions based on the loss values
-        assert len(self.modes) == len(probe_types)
-        self.fit_values(loss_stats, probe_class_map)
+        key_list = list(probe_class_map.keys())
+        assert len(key_list) == self.num_modes
+        
+        for k in key_list:
+            stats = test_tensor(model, probes[k], probes[f"{k}_labels"], msg=f"{k}_probe", return_loss_vals=True)
+            
+            # TODO: Include the max_iters here
+            
+            # Estimate params for beta-distribution
+            alpha, beta, _, _ = scipy.stats.beta.fit(stats["loss_vals"])
+            
+            class_idx = probe_class_map[k]
+            self.key_list[class_idx] = k
+            assert 0 <= class_idx < self.num_modes
+            self.alphas[class_idx] = alpha
+            self.betas[class_idx] = beta
+            print(f"Class: {k} / Idx: {class_idx} / Alpha: {alpha:.4f} / Beta: {beta:.4f}")
+        
+        assert not any([k is None for k in self.alphas])
+        assert not any([k is None for k in self.betas])
+        assert not any([k is None for k in self.key_list])
     
-    def fit_values(self, loss_dict: dict, probe_class_map: dict):
+    def fit_values(self, sample_losses: np.ndarray, loss_dict: dict, probe_class_map: dict):
         """
         Fit loss distribution for different probes
         :param probe_class_map should map from probe names to their actual label
@@ -1545,6 +1586,11 @@ class MultiModalBetaMixture1D(object):
             self.alphas[class_idx] = alpha
             self.betas[class_idx] = beta
             print(f"Class: {k} / Idx: {class_idx} / Alpha: {alpha:.4f} / Beta: {beta:.4f}")
+    
+        # Recompute the mixture weights
+        r = self.responsibilities(sample_losses)
+        self.weight = r.sum(axis=1)
+        self.weight /= self.weight.sum()
 
         assert not any([k is None for k in self.alphas])
         assert not any([k is None for k in self.betas])
@@ -1609,20 +1655,34 @@ class GaussianMixture1D(object):
     def score_samples(self, x):
         return -np.log(self.probability(x))
 
-    def fit(self, model: torch.nn.Module, probes: dict):
+    def fit(self, model: torch.nn.Module, probes: dict, probe_class_map: dict):
         """
         Fit loss distribution for different probes
-        """        
-        probe_types = ["typical", "corrupted", "noisy"]
-        loss_stats = {}
-        for probe in probe_types:
-            stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])
-            loss_stats[probe] = stats["loss_vals"]
-        probe_class_map = {k: i for i, k in enumerate(probe_types)}
+        :param probe_class_map should map from probe names to their actual label
+        """
+        self.means = [None for _ in range(self.num_modes)]
+        self.stds = [None for _ in range(self.num_modes)]
+        self.key_list = [None for _ in range(self.num_modes)]
         
-        # Fit the GMM distributions based on the loss values
-        assert len(self.modes) == len(probe_types)
-        self.fit_values(loss_stats, probe_class_map)
+        key_list = list(probe_class_map.keys())
+        assert len(key_list) == self.num_modes
+        
+        for k in key_list:
+            stats = test_tensor(model, probes[k], probes[f"{k}_labels"], msg=f"{k}_probe", return_loss_vals=True)
+            loss_mean = np.mean(stats["loss_vals"])
+            loss_std = np.std(stats["loss_vals"])
+            # dist = scipy.stats.norm(loss_mean, loss_std)
+            
+            class_idx = probe_class_map[k]
+            self.key_list[class_idx] = k
+            assert 0 <= class_idx < self.num_modes
+            self.means[class_idx] = loss_mean
+            self.stds[class_idx] = loss_std
+            print(f"Class: {k} / Idx: {class_idx} / Loss mean: {loss_mean:.4f} / Loss std: {loss_std:.4f}")
+        
+        assert not any([k is None for k in self.means])
+        assert not any([k is None for k in self.stds])
+        assert not any([k is None for k in self.key_list])
     
     def fit_values(self, loss_dict: dict, probe_class_map: dict):
         """
