@@ -870,7 +870,7 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
 ##################### Leverage multiple probes simultaneously ####################
 
 
-def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True):
+def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True):
     assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
     
     with torch.no_grad():
@@ -883,9 +883,9 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True):
         
         if prob_model is None:
             if use_gmm:
-                prob_model = GaussianMixture1D(num_modes=3)
+                prob_model = GaussianMixture1D(num_modes=3, learn_mixture_weights=adapt_mixture_weights)
             else:
-                prob_model = MultiModalBetaMixture1D(num_modes=3)
+                prob_model = MultiModalBetaMixture1D(num_modes=3, learn_mixture_weights=adapt_mixture_weights)
             prob_model.fit(model, probes)
             print("Probability model:", prob_model)
         
@@ -902,6 +902,7 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
     model.train()
     loss_per_batch = []
 
+    adapt_mixture_weights = False
     acc_train_per_batch = []
     correct = 0
     update_model_every_iter = False
@@ -923,7 +924,7 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm)
+        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights)
         if update_model_every_iter:
             prob_model.fit(model, probes)
             print(prob_model)
