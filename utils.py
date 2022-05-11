@@ -1478,11 +1478,11 @@ class MultiModalBetaMixture1D(object):
         print("Losses shape before update:", losses.shape)
         
         # Recompute the mixture weights
-        print("Mixture weights before update:", self.weights)
+        print("Mixture weights before update:", self.weight)
         r = self.responsibilities(losses)
         self.weight = r.sum(axis=1)
         self.weight /= self.weight.sum()
-        print("Mixture weights after update:", self.weights)
+        print("Mixture weights after update:", self.weight)
         
         self.loss_list = []
 
@@ -1520,7 +1520,7 @@ class MultiModalBetaMixture1D(object):
         probe_class_map = {k: i for i, k in enumerate(probe_types)}
         
         # Fit the BMM distributions based on the loss values
-        assert len(self.modes) == len(probe_types)
+        assert len(probe_types) == self.num_modes
         self.fit_values(loss_stats, probe_class_map)
     
     def fit_values(self, loss_dict: dict, probe_class_map: dict):
@@ -1621,7 +1621,7 @@ class GaussianMixture1D(object):
         probe_class_map = {k: i for i, k in enumerate(probe_types)}
         
         # Fit the GMM distributions based on the loss values
-        assert len(self.modes) == len(probe_types)
+        assert len(probe_types) == self.num_modes
         self.fit_values(loss_stats, probe_class_map)
     
     def fit_values(self, loss_dict: dict, probe_class_map: dict):
