@@ -299,6 +299,7 @@ def main():
             probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
         
         probe_list = ["noisy"]
+        random_gen_labels = probe_list
         if args.treat_three_sets:
             assert args.use_mislabeled_examples, "Three sets only supports mislabeled probes for mislabeled example detection"
             assert args.BootBeta == "HardProbes", "Only HardProbes is supported for three-set treatment"

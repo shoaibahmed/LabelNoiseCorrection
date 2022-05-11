@@ -1494,6 +1494,7 @@ class BetaMixture1D(object):
     def __str__(self):
         return 'BetaMixture1D(w={}, a={}, b={})'.format(self.weight, self.alphas, self.betas)
 
+
 class GaussianMixture1D(object):
     def __init__(self, num_modes):
         assert isinstance(num_modes, int)
