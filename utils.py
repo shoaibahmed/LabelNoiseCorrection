@@ -867,11 +867,16 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
     return (loss_per_epoch, acc_train_per_epoch)
 
 
-##################### Leverage multiple probes simultaneously ####################
+##################### Assign probe class using a combination of GMM and loss values ####################
 
 
-def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True):
-    assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
+def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True, num_modes=3):
+    assert num_modes in [2, 3]
+    if num_modes == 2:
+        assert "noisy" in probes and "typical" in probes, list(probes.keys())
+    else:
+        assert num_modes == 3
+        assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
     
     with torch.no_grad():
         model.eval()
@@ -883,9 +888,9 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
         
         if prob_model is None:
             if use_gmm:
-                prob_model = GaussianMixture1D(num_modes=3, learn_mixture_weights=adapt_mixture_weights)
+                prob_model = GaussianMixture1D(num_modes=num_modes, learn_mixture_weights=adapt_mixture_weights)
             else:
-                prob_model = MultiModalBetaMixture1D(num_modes=3, learn_mixture_weights=adapt_mixture_weights)
+                prob_model = MultiModalBetaMixture1D(num_modes=num_modes, learn_mixture_weights=adapt_mixture_weights)
             prob_model.fit(model, probes)
             print("Probability model:", prob_model)
         
@@ -898,11 +903,105 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
         print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
         return torch.from_numpy(predicted_mode), prob_model
 
+
+def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, use_gmm):
+    model.train()
+    loss_per_batch = []
+
+    acc_train_per_batch = []
+    correct = 0
+    
+    adapt_mixture_weights = True
+    update_model_every_iter = False
+
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+
+        output_x1 = model(data)
+        output_x1.detach_()
+        optimizer.zero_grad()
+
+        inputs_mixed, targets_1, targets_2, lam, index = mixup_data_Boot(data, target, alpha, device)
+        output = model(inputs_mixed)
+        output_mean = F.softmax(output, dim=1)
+        tab_mean_class = torch.mean(output_mean,-2)
+        output = F.log_softmax(output, dim=1)
+
+        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, num_modes=2)
+        if update_model_every_iter:
+            prob_model.fit(model, probes)
+            print(prob_model)
+        
+        B = B.to(device)
+        B[B <= 1e-4] = 1e-4
+        B[B >= 1 - 1e-4] = 1 - 1e-4
+
+        output_x1 = F.log_softmax(output_x1, dim=1)
+        output_x2 = output_x1[index, :]
+        B2 = B[index]
+
+        z1 = torch.max(output_x1, dim=1)[1]
+        z2 = torch.max(output_x2, dim=1)[1]
+
+        loss_x1_vec = (1 - B) * F.nll_loss(output, targets_1, reduction='none')
+        loss_x1 = torch.sum(loss_x1_vec) / len(loss_x1_vec)
+
+        loss_x1_pred_vec = B * F.nll_loss(output, z1, reduction='none')
+        loss_x1_pred = torch.sum(loss_x1_pred_vec) / len(loss_x1_pred_vec)
+
+
+        loss_x2_vec = (1 - B2) * F.nll_loss(output, targets_2, reduction='none')
+        loss_x2 = torch.sum(loss_x2_vec) / len(loss_x2_vec)
+
+
+        loss_x2_pred_vec = B2 * F.nll_loss(output, z2, reduction='none')
+        loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(loss_x2_pred_vec)
+
+        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
+
+        loss_reg = reg_loss_class(tab_mean_class, num_classes)
+        loss = loss + reg_term*loss_reg
+
+        loss.backward()
+
+        optimizer.step()
+        ################## monitor losses  ####################################
+        loss_per_batch.append(loss.item())
+        ########################################################################
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    # Update the mixture weights based on the collected loss values
+    prob_model.update_mixture_weights()
+    
+    # Update the model itself
+    prob_model.fit(model, probes)
+    print(prob_model)
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    return (loss_per_epoch, acc_train_per_epoch, prob_model)
+
+
+##################### Leverage multiple probes simultaneously ####################
+
+
 def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, use_gmm):
     model.train()
     loss_per_batch = []
 
-    adapt_mixture_weights = False
+    adapt_mixture_weights = True
     acc_train_per_batch = []
     correct = 0
     update_model_every_iter = False
@@ -924,7 +1023,7 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights)
+        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, num_modes=3)
         if update_model_every_iter:
             prob_model.fit(model, probes)
             print(prob_model)
@@ -1460,6 +1559,7 @@ class BetaMixture1D(object):
 
 class MultiModalBetaMixture1D(object):
     def __init__(self, num_modes: int, learn_mixture_weights: bool=True):
+        raise NotImplementedError("BMM models density over unit interval...")
         assert isinstance(num_modes, int)
         self.num_modes = num_modes
         self.weight = np.array([1. / self.num_modes for _ in range(num_modes)])
@@ -1589,6 +1689,7 @@ class MultiModalBetaMixture1D(object):
 class GaussianMixture1D(object):
     def __init__(self, num_modes: int, learn_mixture_weights: bool=True):
         assert isinstance(num_modes, int)
+        assert num_modes in [2, 3], num_modes
         self.num_modes = num_modes
         self.weight = np.array([1. / self.num_modes for _ in range(num_modes)])
         self.lookup = np.zeros(100, dtype=np.float64)
@@ -1646,7 +1747,7 @@ class GaussianMixture1D(object):
         """
         Fit loss distribution for different probes
         """        
-        probe_types = ["typical", "corrupted", "noisy"]
+        probe_types = ["typical", "corrupted", "noisy"] if self.num_modes == 3 else ["typical", "noisy"]
         loss_stats = {}
         for probe in probe_types:
             stats = test_tensor(model, probes[probe], probes[f"{probe}_labels"])

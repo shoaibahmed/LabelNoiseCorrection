@@ -98,6 +98,8 @@ def main():
                         help="Use dynamic flooding threshold during training")
     parser.add_argument('--ssl-training', default=False, action='store_true', 
                         help="Use SSL training in conjuction with the CE loss -- specifically useful for noisy samples")
+    parser.add_argument('--use-gmm-probe-identification', default=False, action='store_true', 
+                        help="Identify mislabeled examples using GMM coupled with probes")
     
     parser.add_argument('--use-three-sets', default=False, action='store_true', 
                         help="Use three sets in the dataset")
@@ -176,7 +178,7 @@ def main():
     available_indices = None
     
     if args.use_three_sets:
-        # TODO: Ensure that the labels change and the input noise is mutually exclusive
+        # Ensure that the labels change and the input noise is mutually exclusive
         print("!! Generating three different sets in the dataset...")
         # assert post_proc_transform is not None
         assert args.noise_level < 50.
@@ -198,6 +200,10 @@ def main():
         labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
         noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
         noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
+        
+        # Unchanged indices
+        # TODO: Further filter the scores based on which examples are available
+        available_indices = [i for i in range(len(labels)) if labels[i] == noisy_labels[i]]
     
     noisy_labels = torch.Tensor(noisy_labels)
     misclassified_instances = labels != noisy_labels
@@ -281,32 +287,21 @@ def main():
             
             # Update available indices
             available_indices = [i for i in available_indices if i not in selected_indices]
-            
-            # # Remove these examples from the dataset
-            # print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
-            # num_total_examples = len(trainset)
-            # trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in selected_indices]
-            # trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in selected_indices]
-            # misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in selected_indices]
-            
-            # # Reinitialize the dataloader to generate the right indices for sampler
-            # train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
-            # print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
             indices_to_remove += [i for i in selected_indices]
         
         else:
-            if args.treat_three_sets:
+            if args.treat_three_sets or args.use_gmm_probe_identification:
                 raise NotImplementedError("Definition of corrupted probe is ambiguous...")
             print("Creating random examples with random labels as probe...")
             probes["noisy"] = torch.empty(num_example_probes, *tensor_shape).uniform_(0., 1.)
         
         probe_list = ["noisy"]
         random_gen_labels = probe_list
-        if args.treat_three_sets:
+        if args.treat_three_sets or args.use_gmm_probe_identification:
             assert args.use_mislabeled_examples, "Three sets only supports mislabeled probes for mislabeled example detection"
             assert args.BootBeta == "HardProbes", "Only HardProbes is supported for three-set treatment"
             
-            # TODO: Include another probe for the detection of the third set
+            # Include another probe for the detection of the third set
             assert available_indices is not None
             assert len(available_indices) > num_example_probes, f"Example probes: {num_example_probes} / Available indices: {len(available_indices)}"
             use_random_inputs = True  # Mislabeled examples are detected using mislabeled probe
@@ -317,8 +312,7 @@ def main():
                 selected_indices = np.random.choice(available_indices, size=(num_example_probes,), replace=False)
                 # TODO: Random labels cannot be used in this case...
             
-            # probes["mislabeled"] = probes["noisy"]  # Rename the probe for clarity
-            probe_list = ["noisy", "corrupted", "typical"]
+            probe_list = ["noisy", "corrupted", "typical"] if args.treat_three_sets else ["noisy", "corrupted"]
             random_gen_labels = ["noisy", "corrupted"]
             print("Corrupted probe included in the dataset for three-set treatment...")
             
@@ -471,6 +465,10 @@ def main():
                     if args.treat_three_sets:
                         print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                                                                                        alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment)
+                    elif args.use_gmm_probe_identification:
+                        print("\t##### Doing HARD BETA bootstrapping with GMM combined with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                        loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader_w_probes, optimizer, epoch,\
                                                                                         alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment)
                     else:
                         print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
