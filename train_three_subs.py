@@ -321,7 +321,7 @@ def main():
             assert len(np.unique(selected_indices)) == len(selected_indices)
             
             images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
-            probes["typical"] = torch.stack([transforms_clean(x) for x in images], dim=0)
+            probes["typical"] = torch.stack([transforms_clean(x) for x in images], dim=0).to(device)
             probes[f"typical_labels"] = torch.tensor([train_loader.sampler.data_source.targets[i] for i in selected_indices], dtype=torch.int64).to(device)
             print("Selected image shape:", probes["typical"].shape)
             

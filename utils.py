@@ -885,6 +885,7 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
         batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
         batch_losses = batch_losses.detach_().cpu().numpy()
         outputs.detach_()
+        model.train()
         
         if prob_model is None:
             if use_gmm:
@@ -897,10 +898,13 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
         # Append the loss values for updating the mixture weights
         prob_model.add_loss_vals(batch_losses)
         
-        predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
-        
-        model.train()
-        print(f"Noise predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
+        if num_modes == 3:
+            predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
+            print(f"GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
+        else:
+            assert num_modes == 2
+            predicted_probs = np.array([prob_model.get_probs(float(x)) for x in batch_losses])
+            print(f"GMM predictions \t Clean examples average prob: {np.sum([x[0] for x in predicted_probs])/len(predicted_probs)} \t Noisy examples average prob: {np.sum([x[1] for x in predicted_probs])/len(predicted_probs)}")
         return torch.from_numpy(predicted_mode), prob_model
 
 
