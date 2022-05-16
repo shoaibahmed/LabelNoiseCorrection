@@ -98,8 +98,15 @@ def main():
                         help="Use dynamic flooding threshold during training")
     parser.add_argument('--ssl-training', default=False, action='store_true', 
                         help="Use SSL training in conjuction with the CE loss -- specifically useful for noisy samples")
+    
     parser.add_argument('--use-gmm-probe-identification', default=False, action='store_true', 
                         help="Identify mislabeled examples using GMM coupled with probes")
+    parser.add_argument('--use-adaptive-weights', default=False, action='store_true', 
+                        help="Use adaptive weights for GMM")
+    parser.add_argument('--use-binary-prediction', default=False, action='store_true', 
+                        help="Return binary prediction from the GMM model instead of actual probabilities")
+    parser.add_argument('--update-every-iter', default=False, action='store_true', 
+                        help="Update the GMM mean and std. based on probes after every model iteration")
     
     parser.add_argument('--use-three-sets', default=False, action='store_true', 
                         help="Use three sets in the dataset")
@@ -312,7 +319,7 @@ def main():
                 selected_indices = np.random.choice(available_indices, size=(num_example_probes,), replace=False)
                 # TODO: Random labels cannot be used in this case...
             
-            probe_list = ["noisy", "corrupted", "typical"] if args.treat_three_sets else ["noisy", "corrupted"]
+            probe_list = ["noisy", "corrupted", "typical"] if args.treat_three_sets else ["typical", "noisy"]
             random_gen_labels = ["noisy", "corrupted"]
             print("Corrupted probe included in the dataset for three-set treatment...")
             
@@ -449,6 +456,8 @@ def main():
                 if probes is not None:
                     # Evaluate the model performance on
                     msg = f"Probe during pretraining{' (train_set + probe)' if args.use_probes_for_pretraining else ''}"
+                    if args.use_gmm_probe_identification:
+                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
                     noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
                 
                 if args.bootstrap_probe_acc_thresh is not None:
@@ -469,7 +478,8 @@ def main():
                     elif args.use_gmm_probe_identification:
                         print("\t##### Doing HARD BETA bootstrapping with GMM combined with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader_w_probes, optimizer, epoch,\
-                                                                                        alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment)
+                                                                                        alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment,
+                                                                                        args.use_adaptive_weights, args.use_binary_prediction, args.update_every_iter)
                     else:
                         print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader_w_probes, optimizer, epoch,\

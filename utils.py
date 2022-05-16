@@ -870,7 +870,7 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
 ##################### Assign probe class using a combination of GMM and loss values ####################
 
 
-def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True, num_modes=3):
+def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True, num_modes=3, binary_prediction=True):
     assert num_modes in [2, 3]
     if num_modes == 2:
         assert "noisy" in probes and "typical" in probes, list(probes.keys())
@@ -899,11 +899,11 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
         prob_model.add_loss_vals(batch_losses)
         
         if num_modes == 3:
+            assert binary_prediction, "Only binary prediction is supported when the number of modes is 3"
             predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
             print(f"GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
         else:
             assert num_modes == 2
-            binary_prediction = True
             if binary_prediction:
                 predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
                 print(f"GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Noisy examples: {np.sum(predicted_mode == 1)}")
@@ -914,15 +914,16 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
         return torch.from_numpy(predicted_mode), prob_model
 
 
-def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, use_gmm):
+def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, 
+                                        use_gmm, adapt_mixture_weights, binary_prob_model_prediction, update_model_every_iter):
     model.train()
     loss_per_batch = []
 
     acc_train_per_batch = []
     correct = 0
     
-    adapt_mixture_weights = True
-    update_model_every_iter = False
+    # adapt_mixture_weights = False
+    # update_model_every_iter = False
     recompute_loss_vals = True
 
     for batch_idx, (data, target) in enumerate(train_loader):
@@ -939,7 +940,8 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, num_modes=2)
+        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, 
+                                           num_modes=2, binary_prediction=binary_prob_model_prediction)
         if update_model_every_iter:
             prob_model.fit(model, probes)
             print(prob_model)
