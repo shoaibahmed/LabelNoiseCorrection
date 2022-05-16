@@ -903,9 +903,14 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
             print(f"GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Corrupted examples: {np.sum(predicted_mode == 1)} \t Noisy examples: {np.sum(predicted_mode == 2)}")
         else:
             assert num_modes == 2
-            predicted_probs = np.array([prob_model.get_probs(float(x)) for x in batch_losses])
-            print(f"GMM predictions \t Clean examples average prob: {np.sum([x[0] for x in predicted_probs])/len(predicted_probs)} \t Noisy examples average prob: {np.sum([x[1] for x in predicted_probs])/len(predicted_probs)}")
-            predicted_mode = np.array([x[1] for x in predicted_probs])  # Probability of a sample being noisy
+            binary_prediction = True
+            if binary_prediction:
+                predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
+                print(f"GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Noisy examples: {np.sum(predicted_mode == 1)}")
+            else:
+                predicted_probs = np.array([prob_model.get_probs(float(x)) for x in batch_losses])
+                print(f"GMM predictions \t Clean examples average prob: {np.sum([x[0] for x in predicted_probs])/len(predicted_probs)} \t Noisy examples average prob: {np.sum([x[1] for x in predicted_probs])/len(predicted_probs)}")
+                predicted_mode = np.array([x[1] for x in predicted_probs])  # Probability of a sample being noisy
         return torch.from_numpy(predicted_mode), prob_model
 
 
