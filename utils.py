@@ -905,7 +905,7 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
             assert num_modes == 2
             predicted_probs = np.array([prob_model.get_probs(float(x)) for x in batch_losses])
             print(f"GMM predictions \t Clean examples average prob: {np.sum([x[0] for x in predicted_probs])/len(predicted_probs)} \t Noisy examples average prob: {np.sum([x[1] for x in predicted_probs])/len(predicted_probs)}")
-            predicted_mode = [x[1] for x in predicted_probs]  # Probability of a sample being noisy
+            predicted_mode = np.array([x[1] for x in predicted_probs])  # Probability of a sample being noisy
         return torch.from_numpy(predicted_mode), prob_model
 
 

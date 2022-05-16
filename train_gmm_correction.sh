@@ -1,7 +1,7 @@
 #!/bin/bash
 
 for noise_level in 0 20 50 70 80 90; do
-    job_name="cifar10_ce_noise_${noise_level}_gmm_treatment_adaptive_weights"
+    job_name="cifar10_noise_${noise_level}_m_dyr_h_gmm_treatment_adaptive_weights"
     srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
         --kill-on-bad-exit --job-name ${job_name} --nice=0 \
         --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
@@ -11,7 +11,7 @@ for noise_level in 0 20 50 70 80 90; do
             --bootstrap-epochs 105 --use-probes-for-pretraining --use-mislabeled-examples \
             > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs_gmm_identification/${job_name}.log 2>&1 &
     
-    job_name="cifar100_ce_noise_${noise_level}_gmm_treatment_adaptive_weights"
+    job_name="cifar100_noise_${noise_level}_m_dyr_h_gmm_treatment_adaptive_weights"
     srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G \
         --kill-on-bad-exit --job-name ${job_name} --nice=0 \
         --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
