@@ -455,9 +455,10 @@ def main():
                 loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
                 if probes is not None:
                     # Evaluate the model performance on
-                    msg = f"Probe during pretraining{' (train_set + probe)' if args.use_probes_for_pretraining else ''}"
                     if args.use_gmm_probe_identification:
+                        msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
                         typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
+                    msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
                     noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
                 
                 if args.bootstrap_probe_acc_thresh is not None:
