@@ -923,6 +923,7 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
     
     adapt_mixture_weights = True
     update_model_every_iter = False
+    recompute_loss_vals = True
 
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -992,6 +993,21 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
                        100. * correct / ((batch_idx + 1) * args.batch_size),
                 optimizer.param_groups[0]['lr']))
 
+    if adapt_mixture_weights and recompute_loss_vals:
+        print("Recomputing loss values for updating the mixture weights...")
+        prob_model.reset_loss_vals()
+        model.eval()
+        
+        for data, target in tqdm(train_loader):
+            data, target = data.to(device), target.to(device)
+            outputs = model(data)
+            outputs = F.log_softmax(outputs, dim=1)
+            batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+            batch_losses = batch_losses.detach_().cpu().numpy()
+            prob_model.add_loss_vals(batch_losses)
+        
+        model.train()
+    
     # Update the mixture weights based on the collected loss values
     prob_model.update_mixture_weights()
     
@@ -1712,6 +1728,9 @@ class GaussianMixture1D(object):
         self.stds = [None for _ in range(self.num_modes)]
         self.key_list = [None for _ in range(self.num_modes)]
         self.loss_list = []
+    
+    def reset_loss_vals(self):
+        self.loss_list = []
 
     def add_loss_vals(self, loss_vals: np.ndarray):
         self.loss_list.append(loss_vals)
@@ -1730,7 +1749,7 @@ class GaussianMixture1D(object):
             print("Mixture weights after update:", self.weight)
         
         # Reset the loss list
-        self.loss_list = []
+        self.reset_loss_vals()
     
     def likelihood(self, x, y):
         return scipy.stats.norm.pdf(x, self.means[y], self.stds[y])
