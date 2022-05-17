@@ -371,9 +371,11 @@ def main():
         
         total_instances = len(idx_dataset)
         noisy_probe_instances = np.sum([1 if dataset_probe_identity[i] == "noisy_probe" else 0 for i in range(len(idx_dataset))])
+        typical_probe_instances = np.sum([1 if dataset_probe_identity[i] == "typical_probe" else 0 for i in range(len(idx_dataset))])
+        corrupted_probe_instances = np.sum([1 if dataset_probe_identity[i] == "corrupted_probe" else 0 for i in range(len(idx_dataset))])
         noisy_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_noisy" else 0 for i in range(len(idx_dataset))])
         clean_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_clean" else 0 for i in range(len(idx_dataset))])
-        print(f"Total instances: {total_instances} / Noisy probe instances: {noisy_probe_instances} / Noisy train instances: {noisy_train_instances} / Clean train instances: {clean_train_instances}")
+        print(f"Total instances: {total_instances} / Typical probe instances: {typical_probe_instances} / Corrupted probe instances: {corrupted_probe_instances} / Noisy probe instances: {noisy_probe_instances} / Noisy train instances: {noisy_train_instances} / Clean train instances: {clean_train_instances}")
 
     probe_detection_list = []
     bmm_detection_list = []
