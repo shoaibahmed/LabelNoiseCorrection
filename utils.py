@@ -20,9 +20,11 @@ import cv2
 import kornia.augmentation
 
 import scipy.stats
+import scipy.special
 
 from style_transfer import style_transfer
 from stylized_cifar10.style_transfer_cifar import StyleTransfer
+
 
 ######################### Get data and noise adding ##########################
 def get_data_cifar(loader):
@@ -870,13 +872,14 @@ def train_mixUp_HardBootBeta_probes(args, model, device, train_loader, optimizer
 ##################### Assign probe class using a combination of GMM and loss values ####################
 
 
-def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True, num_modes=3, binary_prediction=True):
+def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, adapt_mixture_weights=True, num_modes=3, binary_prediction=True, softmax_probs=False):
     assert num_modes in [2, 3]
     if num_modes == 2:
         assert "noisy" in probes and "typical" in probes, list(probes.keys())
     else:
         assert num_modes == 3
         assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
+    assert not (binary_prediction and softmax), "Both softmax and binary prediction options cannot be enabled simultaneously..."
     
     with torch.no_grad():
         model.eval()
@@ -906,7 +909,11 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
             assert num_modes == 2
             if binary_prediction:
                 predicted_mode = np.array([prob_model.predict(float(x)) for x in batch_losses])
-                print(f"GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Noisy examples: {np.sum(predicted_mode == 1)}")
+                print(f"Binary GMM predictions \t Clean examples: {np.sum(predicted_mode == 0)} \t Noisy examples: {np.sum(predicted_mode == 1)}")
+            elif softmax_probs:
+                predicted_probs = np.array([prob_model.get_softmax_probs(float(x)) for x in batch_losses])
+                print(f"Softmax GMM predictions \t Clean examples average prob: {np.sum([x[0] for x in predicted_probs])/len(predicted_probs)} \t Noisy examples average prob: {np.sum([x[1] for x in predicted_probs])/len(predicted_probs)}")
+                predicted_mode = np.array([x[1] for x in predicted_probs])  # Probability of a sample being noisy
             else:
                 predicted_probs = np.array([prob_model.get_probs(float(x)) for x in batch_losses])
                 print(f"GMM predictions \t Clean examples average prob: {np.sum([x[0] for x in predicted_probs])/len(predicted_probs)} \t Noisy examples average prob: {np.sum([x[1] for x in predicted_probs])/len(predicted_probs)}")
@@ -915,7 +922,7 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
 
 
 def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, 
-                                        use_gmm, adapt_mixture_weights, binary_prob_model_prediction, update_model_every_iter):
+                                        use_gmm, adapt_mixture_weights, binary_prob_model_prediction, softmax_probs, update_model_every_iter):
     model.train()
     loss_per_batch = []
 
@@ -941,7 +948,7 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
         output = F.log_softmax(output, dim=1)
 
         B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, 
-                                           num_modes=2, binary_prediction=binary_prob_model_prediction)
+                                           num_modes=2, binary_prediction=binary_prob_model_prediction, softmax_probs=softmax_probs)
         if update_model_every_iter:
             prob_model.fit(model, probes)
             print(prob_model)
@@ -1002,10 +1009,11 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
         
         for data, target in tqdm(train_loader):
             data, target = data.to(device), target.to(device)
-            outputs = model(data)
-            outputs = F.log_softmax(outputs, dim=1)
-            batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
-            batch_losses = batch_losses.detach_().cpu().numpy()
+            with torch.no_grad():
+                outputs = model(data)
+                outputs = F.log_softmax(outputs, dim=1)
+                batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+                batch_losses = batch_losses.detach_().cpu().numpy()
             prob_model.add_loss_vals(batch_losses)
         
         model.train()
@@ -1823,6 +1831,9 @@ class GaussianMixture1D(object):
     def predict(self, x):
         return np.argmax(self.get_probs(x))
 
+    def get_softmax_probs(self, x):
+        return scipy.special.softmax(self.get_probs(x))
+
     def create_lookup(self, y):
         x_l = np.linspace(0+self.eps_nan, 1-self.eps_nan, self.lookup_resolution)
         lookup_t = self.posterior(x_l, y)
@@ -1837,11 +1848,20 @@ class GaussianMixture1D(object):
         x_i[x_i == self.lookup_resolution] = self.lookup_resolution - 1
         return self.lookup[x_i]
 
-    def plot(self):
-        x = np.linspace(0, 1, 100)
+    def plot(self, output_file):
+        if output_file is None:
+            return
+        
+        plt.figure(figsize=(12, 8))
+        x = np.linspace(0, 10, 10000)
         for i in range(self.num_modes):
             plt.plot(x, self.weighted_likelihood(x, i), label=self.key_list[i])
         plt.plot(x, self.probability(x), lw=2, label='mixture')
+        
+        plt.xlabel("Loss value")
+        plt.ylabel("Probability density")
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300)
 
     def __str__(self):
         return 'GaussianMixture1D(w={}, means={}, stds={}, classes={})'.format(self.weight, self.means, self.stds, self.key_list)

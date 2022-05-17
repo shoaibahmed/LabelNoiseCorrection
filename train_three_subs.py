@@ -107,8 +107,12 @@ def main():
                         help="Use adaptive weights for GMM")
     parser.add_argument('--use-binary-prediction', default=False, action='store_true', 
                         help="Return binary prediction from the GMM model instead of actual probabilities")
+    parser.add_argument('--use-softmax', default=False, action='store_true', 
+                        help="Use softmax on the probabilities returned by the model")
     parser.add_argument('--update-every-iter', default=False, action='store_true', 
                         help="Update the GMM mean and std. based on probes after every model iteration")
+    parser.add_argument('--resume-from-pretraining', default=False, action='store_true', 
+                        help="Resume from the pretraining phase of the model for quicker experiments")
     
     parser.add_argument('--use-three-sets', default=False, action='store_true', 
                         help="Use three sets in the dataset")
@@ -239,10 +243,11 @@ def main():
             print("Output directory already exists and the experiment seems to be completed. Skipping experiment...")
             exit()
         else:
-            # Remove the old directory and recreate it
-            shutil.rmtree(exp_path)
-            os.makedirs(exp_path)
-            print("Recreated the output directory after deleting old results...")
+            if not args.resume_from_pretraining:
+                # Remove the old directory and recreate it
+                shutil.rmtree(exp_path)
+                os.makedirs(exp_path)
+                print("Recreated the output directory after deleting old results...")
     bmm_model=bmm_model_maxLoss=bmm_model_minLoss=cont=k = 0
 
     bootstrap_ep_std = milestones[0] + 5 + 1 # the +1 is because the conditions are defined as ">" or "<" not ">="
@@ -456,6 +461,9 @@ def main():
         if args.Mixup == "Static":
             alpha = args.alpha
             if epoch < bootstrap_ep_mixup:
+                if args.resume_from_pretraining:
+                    continue  # Skip the step
+                
                 print('\t##### Doing NORMAL mixup{0} for {1} epochs #####'.format(' with probes' if args.use_probes_for_pretraining else '', bootstrap_ep_mixup - 1))
                 loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
                 if probes is not None:
@@ -472,6 +480,23 @@ def main():
                         bootstrap_ep_mixup = epoch
 
             else:
+                pretrained_snap = f"pretrained_model{'_probes' if args.use_probes_for_pretraining else ''}"
+                model_checkpoint = os.path.join(exp_path, pretrained_snap + '.pth')
+                optimizer_checkpoint = os.path.join(exp_path, 'opt_' + pretrained_snap + '.pth')
+                
+                if args.resume_from_pretraining:
+                    assert os.path.exists(model_checkpoint)
+                    assert os.path.exists(optimizer_checkpoint)
+                    print("Loading pretrained checkpoint...")
+                    model.load_state_dict(torch.load(model_checkpoint))
+                    optimizer.load_state_dict(torch.load(optimizer_checkpoint))
+                else:
+                    # Save the pretrained checkpoint
+                    if not os.path.exists(model_checkpoint):
+                        print("Saving the checkpoint file here after the pretraining phase...")
+                        torch.save(model.state_dict(), model_checkpoint)
+                        torch.save(optimizer.state_dict(), optimizer_checkpoint)
+                                
                 if args.BootBeta == "Hard":
                     print("\t##### Doing HARD BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch,\
@@ -485,7 +510,7 @@ def main():
                         print("\t##### Doing HARD BETA bootstrapping with GMM combined with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader_w_probes, optimizer, epoch,\
                                                                                         alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment,
-                                                                                        args.use_adaptive_weights, args.use_binary_prediction, args.update_every_iter)
+                                                                                        args.use_adaptive_weights, args.use_binary_prediction, args.use_softmax, args.update_every_iter)
                     else:
                         print("\t##### Doing HARD BETA bootstrapping with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta_probes(args, model, device, train_loader_w_probes, optimizer, epoch,\
