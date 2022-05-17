@@ -388,6 +388,7 @@ def main():
     probe_detection_list = []
     bmm_detection_list = []
     prob_model = None
+    model_loaded = False
 
     for epoch in range(1, args.epochs + 1):
         # train
@@ -484,7 +485,7 @@ def main():
                 model_checkpoint = os.path.join(exp_path, pretrained_snap + '.pth')
                 optimizer_checkpoint = os.path.join(exp_path, 'opt_' + pretrained_snap + '.pth')
                 
-                if args.resume_from_pretraining:
+                if args.resume_from_pretraining and not model_loaded:
                     assert os.path.exists(model_checkpoint)
                     assert os.path.exists(optimizer_checkpoint)
                     print("Loading pretrained checkpoint...")
@@ -492,6 +493,7 @@ def main():
                     optimizer.load_state_dict(torch.load(optimizer_checkpoint))
                     
                     best_acc_val = None
+                    model_loaded = True
                     
                     # Recreate the BMM model
                     epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
