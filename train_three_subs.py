@@ -85,6 +85,8 @@ def main():
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
                         help="Parameter of the regularization term, default: 0.")
+    parser.add_argument('--num-workers', type=int, default=4,
+                        help='number of worker processes for data loading')
     
     parser.add_argument('--flood-test', default=False, action='store_true', 
                         help="Use flooding-based training")
@@ -170,9 +172,9 @@ def main():
         raise NotImplementedError
     ssl_training = args.ssl_training
     
-    train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
-    train_loader_track = torch.utils.data.DataLoader(trainset_track, batch_size=args.batch_size, shuffle=False, num_workers=1, pin_memory=True)
-    test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=1, pin_memory=True)
+    train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+    train_loader_track = torch.utils.data.DataLoader(trainset_track, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
     model = PreResNet.ResNet18(num_classes=num_classes, ssl_training=ssl_training).to(device)
 
     milestones = args.M
@@ -337,13 +339,14 @@ def main():
         if len(indices_to_remove) > 0:
             # Remove these examples from the dataset
             print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
+            print("Number of indices to be removed:", len(indices_to_remove))
             num_total_examples = len(trainset)
             trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in indices_to_remove]
             trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in indices_to_remove]
             misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in indices_to_remove]
             
             # Reinitialize the dataloader to generate the right indices for sampler
-            train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+            train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
             print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
         
         assert all([probes[k].shape == (num_example_probes, *tensor_shape) for k in probe_list])
@@ -366,8 +369,8 @@ def main():
         print("Probe dataset:", len(comb_trainset), comb_trainset[0][0].shape)
         
         idx_dataset = IdxDataset(comb_trainset, dataset_probe_identity)
-        idx_train_loader = torch.utils.data.DataLoader(idx_dataset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
-        train_loader_w_probes = torch.utils.data.DataLoader(comb_trainset, batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True)
+        idx_train_loader = torch.utils.data.DataLoader(idx_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+        train_loader_w_probes = torch.utils.data.DataLoader(comb_trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
         
         total_instances = len(idx_dataset)
         noisy_probe_instances = np.sum([1 if dataset_probe_identity[i] == "noisy_probe" else 0 for i in range(len(idx_dataset))])
