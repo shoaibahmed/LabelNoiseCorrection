@@ -279,6 +279,7 @@ def track_training_loss(args, model, device, train_loader, epoch, bmm_model1, bm
 
     bmm_model = BetaMixture1D(max_iters=10)
     bmm_model.fit(loss_tr)
+    print(bmm_model)
 
     bmm_model.create_lookup(1)
 
@@ -1424,7 +1425,9 @@ def compute_probabilities_batch(data, target, cnn_model, bmm_model, bmm_model_ma
 
     #B = bmm_model.posterior(batch_losses,1)
     B = bmm_model.look_lookup(batch_losses, bmm_model_maxLoss, bmm_model_minLoss)
-
+    
+    print(f"BMM prob predictions \t Clean examples average prob: {np.sum(1-B)/len(B)} \t Noisy examples average prob: {np.sum(B)/len(B)}")
+    
     return torch.FloatTensor(B)
 
 
@@ -1771,7 +1774,7 @@ class GaussianMixture1D(object):
         return [self.weighted_likelihood(x, y) for y in range(self.num_modes)]
 
     def probability(self, x):
-        return sum(self.weighted_likelihood(x, y) for y in range(self.num_modes))
+        return sum(self.weighted_likelihoods(x))
 
     def posterior(self, x, y):
         return self.weighted_likelihood(x, y) / (self.probability(x) + self.eps_nan)
@@ -1835,7 +1838,6 @@ class GaussianMixture1D(object):
         return np.argmax(self.get_probs(x))
 
     def get_softmax_probs(self, x):
-        # return scipy.special.softmax(self.get_probs(x))
         return scipy.special.softmax(self.weighted_likelihoods(x))
 
     def create_lookup(self, y):

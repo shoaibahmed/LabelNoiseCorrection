@@ -490,6 +490,10 @@ def main():
                     print("Loading pretrained checkpoint...")
                     model.load_state_dict(torch.load(model_checkpoint))
                     optimizer.load_state_dict(torch.load(optimizer_checkpoint))
+                    
+                    # Recreate the BMM model
+                    epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
+                        track_training_loss(args, model, device, train_loader_track, epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
                 else:
                     # Save the pretrained checkpoint
                     if not os.path.exists(model_checkpoint):
