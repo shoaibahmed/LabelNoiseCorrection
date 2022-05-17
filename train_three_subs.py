@@ -491,6 +491,8 @@ def main():
                     model.load_state_dict(torch.load(model_checkpoint))
                     optimizer.load_state_dict(torch.load(optimizer_checkpoint))
                     
+                    best_acc_val = None
+                    
                     # Recreate the BMM model
                     epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
                         track_training_loss(args, model, device, train_loader_track, epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
@@ -548,7 +550,7 @@ def main():
         # test
         loss_per_epoch, acc_val_per_epoch_i = test_cleaning(args, model, device, test_loader)
 
-        if epoch == 1:
+        if epoch == 1 or best_acc_val is None:
             best_acc_val = acc_val_per_epoch_i[-1]
             snapBest = 'best_epoch_%d_valLoss_%.5f_valAcc_%.5f_noise_%d_bestAccVal_%.5f' % (
                 epoch, loss_per_epoch[-1], acc_val_per_epoch_i[-1], args.noise_level, best_acc_val)
