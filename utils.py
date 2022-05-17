@@ -879,7 +879,7 @@ def assign_probe_class(data, target, model, probes, prob_model, use_gmm=True, ad
     else:
         assert num_modes == 3
         assert "noisy" in probes and "corrupted" in probes and "typical" in probes, list(probes.keys())
-    assert not (binary_prediction and softmax), "Both softmax and binary prediction options cannot be enabled simultaneously..."
+    assert not (binary_prediction and softmax_probs), "Both softmax and binary prediction options cannot be enabled simultaneously..."
     
     with torch.no_grad():
         model.eval()
@@ -1766,6 +1766,9 @@ class GaussianMixture1D(object):
 
     def weighted_likelihood(self, x, y):
         return self.weight[y] * self.likelihood(x, y)
+    
+    def weighted_likelihoods(self, x):
+        return [self.weighted_likelihood(x, y) for y in range(self.num_modes)]
 
     def probability(self, x):
         return sum(self.weighted_likelihood(x, y) for y in range(self.num_modes))
@@ -1832,7 +1835,8 @@ class GaussianMixture1D(object):
         return np.argmax(self.get_probs(x))
 
     def get_softmax_probs(self, x):
-        return scipy.special.softmax(self.get_probs(x))
+        # return scipy.special.softmax(self.get_probs(x))
+        return scipy.special.softmax(self.weighted_likelihoods(x))
 
     def create_lookup(self, y):
         x_l = np.linspace(0+self.eps_nan, 1-self.eps_nan, self.lookup_resolution)
