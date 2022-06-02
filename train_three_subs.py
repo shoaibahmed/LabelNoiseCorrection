@@ -12,6 +12,7 @@ import torchvision.models as models
 import random
 import os
 import shutil
+import copy
 import numpy as np
 import pickle
 from matplotlib import pyplot as plt
@@ -127,6 +128,8 @@ def main():
                         help="Use mislabeled examples instead of the noisy probes to identify the correct point to stop model training")
     parser.add_argument('--use-probes-for-pretraining', default=False, action='store_true', 
                         help="Also include probes for pretraining phase.")
+    parser.add_argument('--use-unmodified-train-set-for-pretraining', default=False, action='store_true', 
+                        help="Also include probes for pretraining phase.")
     parser.add_argument('--bootstrap-epochs', type=int, default=None, 
                         help="Number of epochs for the model to be trained conventionally (without label correction) -- defaults to 105 epochs.")
     parser.add_argument('--bootstrap-probe-acc-thresh', type=float, default=None, 
@@ -221,6 +224,10 @@ def main():
     noisy_labels = torch.Tensor(noisy_labels)
     misclassified_instances = labels != noisy_labels
     print(f"Percentage of changed instances: {torch.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({torch.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
+    
+    # Create a copy of the dataset
+    trainset_copy = copy.deepcopy(trainset)
+    train_loader_unmodified = torch.utils.data.DataLoader(trainset_copy, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     
     assert not args.dynamic_flood_thresh or args.flood_test
     if args.flood_test:
@@ -465,20 +472,24 @@ def main():
                 if args.resume_from_pretraining:
                     continue  # Skip the step
                 
-                print('\t##### Doing NORMAL mixup{0} for {1} epochs #####'.format(' with probes' if args.use_probes_for_pretraining else '', bootstrap_ep_mixup - 1))
-                loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
-                if probes is not None:
-                    # Evaluate the model performance on
-                    if args.use_gmm_probe_identification:
-                        msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
-                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
-                    msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
-                    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
-                
-                if args.bootstrap_probe_acc_thresh is not None:
-                    if noisy_stats["acc"] >= args.bootstrap_probe_acc_thresh:
-                        print(f"!! Accuracy on probe exceeded to {noisy_stats['acc']}% (threhold={args.bootstrap_probe_acc_thresh}%). Stopping pretraining...")
-                        bootstrap_ep_mixup = epoch
+                if args.use_unmodified_train_set_for_pretraining:
+                    print('\t##### Doing NORMAL mixup on unmodified train set for {0} epochs #####'.format(bootstrap_ep_mixup - 1))
+                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_unmodified, optimizer, epoch, 32)
+                else:
+                    print('\t##### Doing NORMAL mixup{0} for {1} epochs #####'.format(' with probes' if args.use_probes_for_pretraining else '', bootstrap_ep_mixup - 1))
+                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
+                    if probes is not None:
+                        # Evaluate the model performance on
+                        if args.use_gmm_probe_identification:
+                            msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
+                            typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
+                        msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
+                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
+                    
+                    if args.bootstrap_probe_acc_thresh is not None:
+                        if noisy_stats["acc"] >= args.bootstrap_probe_acc_thresh:
+                            print(f"!! Accuracy on probe exceeded to {noisy_stats['acc']}% (threhold={args.bootstrap_probe_acc_thresh}%). Stopping pretraining...")
+                            bootstrap_ep_mixup = epoch
 
             else:
                 pretrained_snap = f"pretrained_model{'_probes' if args.use_probes_for_pretraining else ''}"
@@ -492,12 +503,18 @@ def main():
                     model.load_state_dict(torch.load(model_checkpoint))
                     optimizer.load_state_dict(torch.load(optimizer_checkpoint))
                     
-                    best_acc_val = None
-                    model_loaded = True
+                    # Determine the best test accuracy of the pretrained model
+                    loss_per_epoch, acc_val_per_epoch_i = test_cleaning(args, model, device, test_loader)
+                    best_acc_val = acc_val_per_epoch_i[-1]
+                    snapBest = 'best_epoch_%d_valLoss_%.5f_valAcc_%.5f_noise_%d_bestAccVal_%.5f' % (
+                        epoch, loss_per_epoch[-1], acc_val_per_epoch_i[-1], args.noise_level, best_acc_val)
                     
                     # Recreate the BMM model
                     epoch_losses_train, epoch_probs_train, argmaxXentropy_train, bmm_model, bmm_model_maxLoss, bmm_model_minLoss = \
                         track_training_loss(args, model, device, train_loader_track, epoch, bmm_model, bmm_model_maxLoss, bmm_model_minLoss)
+                    
+                    model_loaded = True
+                    print(f"Pretrained model accuracy: {best_acc_val}%")
                 else:
                     # Save the pretrained checkpoint
                     if not os.path.exists(model_checkpoint):
@@ -552,7 +569,7 @@ def main():
         # test
         loss_per_epoch, acc_val_per_epoch_i = test_cleaning(args, model, device, test_loader)
 
-        if epoch == 1 or best_acc_val is None:
+        if epoch == 1:
             best_acc_val = acc_val_per_epoch_i[-1]
             snapBest = 'best_epoch_%d_valLoss_%.5f_valAcc_%.5f_noise_%d_bestAccVal_%.5f' % (
                 epoch, loss_per_epoch[-1], acc_val_per_epoch_i[-1], args.noise_level, best_acc_val)
