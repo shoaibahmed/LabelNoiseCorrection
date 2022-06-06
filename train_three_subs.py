@@ -225,10 +225,6 @@ def main():
     misclassified_instances = labels != noisy_labels
     print(f"Percentage of changed instances: {torch.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({torch.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
     
-    # Create a copy of the dataset
-    trainset_copy = copy.deepcopy(trainset)
-    train_loader_unmodified = torch.utils.data.DataLoader(trainset_copy, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
-    
     assert not args.dynamic_flood_thresh or args.flood_test
     if args.flood_test:
         assert args.reg_term == 0.
@@ -474,7 +470,7 @@ def main():
                 
                 if args.use_unmodified_train_set_for_pretraining:
                     print('\t##### Doing NORMAL mixup on unmodified train set for {0} epochs #####'.format(bootstrap_ep_mixup - 1))
-                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_unmodified, optimizer, epoch, 32)
+                    loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_track, optimizer, epoch, 32)
                 else:
                     print('\t##### Doing NORMAL mixup{0} for {1} epochs #####'.format(' with probes' if args.use_probes_for_pretraining else '', bootstrap_ep_mixup - 1))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_w_probes if args.use_probes_for_pretraining else train_loader, optimizer, epoch, 32)
@@ -521,7 +517,7 @@ def main():
                         print("Saving the checkpoint file here after the pretraining phase...")
                         torch.save(model.state_dict(), model_checkpoint)
                         torch.save(optimizer.state_dict(), optimizer_checkpoint)
-                                
+                
                 if args.BootBeta == "Hard":
                     print("\t##### Doing HARD BETA bootstrapping and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch,\
@@ -530,7 +526,8 @@ def main():
                     if args.treat_three_sets:
                         print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
-                                                                                        alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment)
+                                                                                        alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment,
+                                                                                        args.use_adaptive_weights, args.update_every_iter)
                     elif args.use_gmm_probe_identification:
                         print("\t##### Doing HARD BETA bootstrapping with GMM combined with Probes and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader_w_probes, optimizer, epoch,\

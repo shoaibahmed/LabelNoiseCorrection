@@ -929,9 +929,6 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
 
     acc_train_per_batch = []
     correct = 0
-    
-    # adapt_mixture_weights = False
-    # update_model_every_iter = False
     recompute_loss_vals = True
 
     for batch_idx, (data, target) in enumerate(train_loader):
@@ -1034,17 +1031,17 @@ def train_mixUp_HardBootBeta_probes_gmm(args, model, device, train_loader, optim
 ##################### Leverage multiple probes simultaneously ####################
 
 
-def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model, use_gmm):
+def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader, optimizer, epoch, alpha, reg_term, num_classes, probes, prob_model,
+                                               use_gmm, adapt_mixture_weights, update_model_every_iter):
     model.train()
     loss_per_batch = []
 
-    adapt_mixture_weights = True
     acc_train_per_batch = []
     correct = 0
-    update_model_every_iter = False
     reweight_loss = False
     adaptive_reweighting = False
     use_flooding = False
+    recompute_loss_vals = True
 
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -1060,7 +1057,8 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
         tab_mean_class = torch.mean(output_mean,-2)
         output = F.log_softmax(output, dim=1)
 
-        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, num_modes=3)
+        B, prob_model = assign_probe_class(data, target, model, probes, prob_model, use_gmm=use_gmm, adapt_mixture_weights=adapt_mixture_weights, 
+                                           num_modes=3, binary_prediction=True, softmax_probs=False)
         if update_model_every_iter:
             prob_model.fit(model, probes)
             print(prob_model)
@@ -1163,6 +1161,22 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
                        100. * correct / ((batch_idx + 1) * args.batch_size),
                 optimizer.param_groups[0]['lr']))
 
+    if adapt_mixture_weights and recompute_loss_vals:
+        print("Recomputing loss values for updating the mixture weights...")
+        prob_model.reset_loss_vals()
+        model.eval()
+        
+        for data, target in tqdm(train_loader):
+            data, target = data.to(device), target.to(device)
+            with torch.no_grad():
+                outputs = model(data)
+                outputs = F.log_softmax(outputs, dim=1)
+                batch_losses = F.nll_loss(outputs.float(), target, reduction = 'none')
+                batch_losses = batch_losses.detach_().cpu().numpy()
+            prob_model.add_loss_vals(batch_losses)
+        
+        model.train()
+    
     # Update the mixture weights based on the collected loss values
     prob_model.update_mixture_weights()
     
