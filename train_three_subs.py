@@ -199,6 +199,7 @@ def main():
         # assert post_proc_transform is not None
         assert args.noise_level < 50.
         noised_input_idx = add_input_noise_cifar_w(train_loader, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
+        _ = add_input_noise_cifar_w(train_loader_track, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
         
         labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
         noisy_labels, noised_label_idx = add_noise_cifar_w_new(train_loader, args.noise_level, noised_input_idx)  # it changes the labels in the train loader directly
