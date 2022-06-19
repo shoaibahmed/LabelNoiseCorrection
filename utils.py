@@ -10,6 +10,7 @@ import math
 import numpy as np
 from matplotlib import pyplot as plt
 
+import sklearn.neighbors
 from sklearn.mixture import GaussianMixture as GMM
 from sklearn import preprocessing as preprocessing
 import sys
@@ -24,6 +25,30 @@ import scipy.special
 
 from style_transfer import style_transfer
 from stylized_cifar10.style_transfer_cifar import StyleTransfer
+
+
+class CustomTensorDataset(torch.utils.data.Dataset):
+    def __init__(self, x: torch.Tensor, y: list) -> None:
+        self.x = x
+        self.y = y
+
+    def __getitem__(self, index):
+        return self.x[index], self.y[index]
+
+    def __len__(self):
+        return self.x.size(0)
+
+
+class IdxDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, dataset_probe_identity):
+        self.dataset = dataset
+        self.dataset_probe_identity = dataset_probe_identity
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        return self.dataset[idx], idx
 
 
 ######################### Get data and noise adding ##########################
@@ -1188,6 +1213,212 @@ def train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
     return (loss_per_epoch, acc_train_per_epoch, prob_model)
 
+
+##################### Label correction based on full loss trajectories ####################
+
+def mixup_criterion_per_example(pred, y_a, y_b, lam):
+    return lam * F.nll_loss(pred, y_a, reduction='none') + (1 - lam) * F.nll_loss(pred, y_b, reduction='none')
+
+
+def train_mixUp_traj(args, model, device, train_loader, optimizer, epoch, alpha, trajectory_set):
+    model.train()
+    loss_per_batch = []
+
+    acc_train_per_batch = []
+    correct = 0
+    
+    example_idx = []
+    loss_vals = []
+    
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        
+        inputs, targets_a, targets_b, lam = mixup_data(data, target, alpha, device)
+
+        output = model(inputs)
+        output = F.log_softmax(output, dim=1)
+        # loss_per_ex = mixup_criterion_per_example(output, targets_a, targets_b, lam)
+        # loss = loss_per_ex.mean()
+        loss = mixup_criterion(output, targets_a, targets_b, lam)
+        
+        # Compute individual example losses
+        with torch.no_grad():
+            example_losses = F.nll_loss(output, target, reduction='none')
+            example_idx.append(ex_idx.clone().cpu())
+            loss_vals.append(example_losses.clone().cpu())
+
+        loss.backward()
+        optimizer.step()
+
+        loss_per_batch.append(loss.item())
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+    loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+    
+    # Sort the loss list
+    sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+    for i in range(len(example_idx)):
+        assert example_idx[i] is None
+        sorted_loss_list[example_idx[i]] = loss_vals[i]
+    assert not any([x is None for x in sorted_loss_list])
+    
+    # Append the loss list to loss trajectory
+    if trajectory_set is None:
+        trajectory_set = dict(train=[sorted_loss_list])
+    else:
+        assert "train" in trajectory_set
+        trajectory_set["train"].append(sorted_loss_list)
+
+    return trajectory_set
+
+
+def get_set_distances(point_set_A, point_set_B):
+    assert len(point_set_A.shape) == 2 and len(point_set_B.shape) == 2, point_set_A.shape
+    assert point_set_A.shape[1] == 2 and point_set_B.shape[1] == 2
+    return np.linalg.norm(point_set_A[:, None, :] - point_set_B[None, :, :], axis=-1)
+
+
+def nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajectory_set, ex_idx):
+    # Preds: 0 -> clean ; 1 -> noisy
+    preds = []
+    ex_trajs = np.array([trajectory_set[i] for i in ex_idx])
+    assert len(ex_trajs.shape) == 2
+    assert ex_trajs.shape[1] == typical_trajectories.shape[1] == noisy_trajectories.shape[1]
+    typical_probe_dist = np.min(get_set_distances(ex_trajs, typical_trajectories), axis=1)
+    noisy_probe_dist = np.min(get_set_distances(ex_trajs, noisy_trajectories), axis=1)
+    preds = (noisy_probe_dist < typical_probe_dist).astype(np.int64)  # If the closest example is 
+    return torch.from_numpy(preds)
+
+
+def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader, optimizer, epoch, alpha, 
+                                              reg_term, num_classes, probes, trajectory_set):
+    assert isinstance(train_loader.dataset, IdxDataset)
+    model.train()
+    loss_per_batch = []
+
+    acc_train_per_batch = []
+    correct = 0
+    
+    example_idx = []
+    loss_vals = []
+    
+    typical_trajectories = np.array(trajectory_set["typical"])
+    noisy_trajectories = np.array(trajectory_set["noisy"])
+    print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
+    
+    probe_trajectories = np.concatenate([typical_trajectories, noisy_trajectories], axis=0)
+    targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(noisy_trajectories))])
+    print(f"Combined probe trajectories: {probe_trajectories.shape} / Targets: {targets.shape}")
+    
+    n_neighbors = 20
+    clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+    clf.fit(probe_trajectories, targets)
+
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+
+        output_x1 = model(data)
+        output_x1.detach_()
+        optimizer.zero_grad()
+
+        inputs_mixed, targets_1, targets_2, lam, index = mixup_data_Boot(data, target, alpha, device)
+        output = model(inputs_mixed)
+        output_mean = F.softmax(output, dim=1)
+        tab_mean_class = torch.mean(output_mean,-2)
+        output = F.log_softmax(output, dim=1)
+        
+        # Compute individual example losses
+        with torch.no_grad():
+            example_losses = F.nll_loss(output, target, reduction='none')
+            example_idx.append(ex_idx.clone().cpu())
+            loss_vals.append(example_losses.clone().cpu())
+
+        # B = nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajectory_set, ex_idx)
+        ex_trajs = np.array([trajectory_set[i] for i in ex_idx])
+        B = clf.predict(ex_trajs)  # 1 means noisy
+        B = torch.from_numpy(np.array(B)).to(device)
+        B[B <= 1e-4] = 1e-4
+        B[B >= 1 - 1e-4] = 1 - 1e-4
+
+        output_x1 = F.log_softmax(output_x1, dim=1)
+        output_x2 = output_x1[index, :]
+        B2 = B[index]
+
+        z1 = torch.max(output_x1, dim=1)[1]
+        z2 = torch.max(output_x2, dim=1)[1]
+
+        loss_x1_vec = (1 - B) * F.nll_loss(output, targets_1, reduction='none')
+        loss_x1 = torch.sum(loss_x1_vec) / len(loss_x1_vec)
+
+        loss_x1_pred_vec = B * F.nll_loss(output, z1, reduction='none')
+        loss_x1_pred = torch.sum(loss_x1_pred_vec) / len(loss_x1_pred_vec)
+
+
+        loss_x2_vec = (1 - B2) * F.nll_loss(output, targets_2, reduction='none')
+        loss_x2 = torch.sum(loss_x2_vec) / len(loss_x2_vec)
+
+
+        loss_x2_pred_vec = B2 * F.nll_loss(output, z2, reduction='none')
+        loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(loss_x2_pred_vec)
+
+        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
+
+        loss_reg = reg_loss_class(tab_mean_class, num_classes)
+        loss = loss + reg_term*loss_reg
+
+        loss.backward()
+
+        optimizer.step()
+        ################## monitor losses  ####################################
+        loss_per_batch.append(loss.item())
+        ########################################################################
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+    loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+    
+    # Sort the loss list
+    sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+    for i in range(len(example_idx)):
+        assert example_idx[i] is None
+        sorted_loss_list[example_idx[i]] = loss_vals[i]
+    assert not any([x is None for x in sorted_loss_list])
+    
+    # Append the loss list to loss trajectory
+    if trajectory_set is None:
+        trajectory_set = dict(train=[sorted_loss_list])
+    else:
+        assert "train" in trajectory_set
+        trajectory_set["train"].append(sorted_loss_list)
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
 
 ##################### Mixup Beta Soft Bootstrapping ####################
 # Mixup guided by our beta model with beta soft bootstrapping

@@ -22,30 +22,6 @@ sys.path.append('../')
 from utils import *
 
 
-class CustomTensorDataset(torch.utils.data.Dataset):
-    def __init__(self, x: torch.Tensor, y: list) -> None:
-        self.x = x
-        self.y = y
-
-    def __getitem__(self, index):
-        return self.x[index], self.y[index]
-
-    def __len__(self):
-        return self.x.size(0)
-
-
-class IdxDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset, dataset_probe_identity):
-        self.dataset = dataset
-        self.dataset_probe_identity = dataset_probe_identity
-    
-    def __len__(self):
-        return len(self.dataset)
-    
-    def __getitem__(self, idx):
-        return self.dataset[idx], idx
-
-
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
 
@@ -134,12 +110,16 @@ def main():
                         help="Number of epochs for the model to be trained conventionally (without label correction) -- defaults to 105 epochs.")
     parser.add_argument('--bootstrap-probe-acc-thresh', type=float, default=None, 
                         help="Accuracy on the probes to be reached for the bootstraping to stop.")
+    parser.add_argument('--use-loss-trajectories', default=False, action='store_true', 
+                        help="Use the full loss trajectory instead of just point estimates for the loss")
     
     args = parser.parse_args()
     
     print(args)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    assert not args.use_loss_trajectories or not args.use_unmodified_train_set_for_pretraining
+    assert not args.use_loss_trajectories or args.use_probes_for_pretraining
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -392,6 +372,7 @@ def main():
     probe_detection_list = []
     bmm_detection_list = []
     prob_model = None
+    trajectory_set = {"typical": [], "noisy": [], "train": []}
     model_loaded = False
 
     for epoch in range(1, args.epochs + 1):
@@ -469,7 +450,23 @@ def main():
                 if args.resume_from_pretraining:
                     continue  # Skip the step
                 
-                if args.use_unmodified_train_set_for_pretraining:
+                if args.use_loss_trajectories:
+                    print('\t##### Doing NORMAL mixup with loss trajectories for {0} epochs #####'.format(bootstrap_ep_mixup - 1))
+                    trajectory_set = train_mixUp_traj(args, model, device, idx_train_loader, optimizer, epoch, 32, trajectory_set)
+                    assert probes is not None
+                    
+                    msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
+                    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
+                    msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
+                    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
+                    trajectory_set["typical"].append(typical_stats["loss_vals"])
+                    trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+                    
+                    if args.bootstrap_probe_acc_thresh is not None:
+                        if noisy_stats["acc"] >= args.bootstrap_probe_acc_thresh:
+                            print(f"!! Accuracy on probe exceeded to {noisy_stats['acc']}% (threhold={args.bootstrap_probe_acc_thresh}%). Stopping pretraining...")
+                            bootstrap_ep_mixup = epoch
+                elif args.use_unmodified_train_set_for_pretraining:
                     print('\t##### Doing NORMAL mixup on unmodified train set for {0} epochs #####'.format(bootstrap_ep_mixup - 1))
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp(args, model, device, train_loader_track, optimizer, epoch, 32)
                 else:
@@ -524,7 +521,11 @@ def main():
                     loss_per_epoch, acc_train_per_epoch_i = train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch,\
                                                                                      alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
                 if args.BootBeta == "HardProbes":
-                    if args.treat_three_sets:
+                    if args.use_loss_trajectories:
+                        print("\t##### Doing HARD BETA bootstrapping with loss trajectories and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                        loss_per_epoch, acc_train_per_epoch_i, trajectory_set = train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                                                                                        alpha, args.reg_term, num_classes, probes, trajectory_set)
+                    elif args.treat_three_sets:
                         print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
                                                                                         alpha, args.reg_term, num_classes, probes, prob_model, not args.use_bmm_treatment,
