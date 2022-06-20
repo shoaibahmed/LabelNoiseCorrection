@@ -120,6 +120,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     assert not args.use_loss_trajectories or not args.use_unmodified_train_set_for_pretraining
     assert not args.use_loss_trajectories or args.use_probes_for_pretraining
+    assert not args.use_loss_trajectories or args.use_gmm_probe_identification
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -523,7 +524,7 @@ def main():
                 if args.BootBeta == "HardProbes":
                     if args.use_loss_trajectories:
                         print("\t##### Doing HARD BETA bootstrapping with loss trajectories and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
-                        loss_per_epoch, acc_train_per_epoch_i, trajectory_set = train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader_w_probes, optimizer, epoch,\
+                        loss_per_epoch, acc_train_per_epoch_i, trajectory_set = train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, idx_train_loader, optimizer, epoch,\
                                                                                         alpha, args.reg_term, num_classes, probes, trajectory_set)
                     elif args.treat_three_sets:
                         print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))

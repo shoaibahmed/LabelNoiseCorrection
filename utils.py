@@ -1271,7 +1271,7 @@ def train_mixUp_traj(args, model, device, train_loader, optimizer, epoch, alpha,
     # Sort the loss list
     sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
     for i in range(len(example_idx)):
-        assert example_idx[i] is None
+        assert sorted_loss_list[example_idx[i]] is None
         sorted_loss_list[example_idx[i]] = loss_vals[i]
     assert not any([x is None for x in sorted_loss_list])
     
@@ -1305,7 +1305,6 @@ def nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajec
 
 def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader, optimizer, epoch, alpha, 
                                               reg_term, num_classes, probes, trajectory_set):
-    assert isinstance(train_loader.dataset, IdxDataset)
     model.train()
     loss_per_batch = []
 
@@ -1315,9 +1314,11 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
     example_idx = []
     loss_vals = []
     
-    typical_trajectories = np.array(trajectory_set["typical"])
-    noisy_trajectories = np.array(trajectory_set["noisy"])
+    typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
+    noisy_trajectories = np.array(trajectory_set["noisy"]).transpose(1, 0)
+    train_trajectories = np.array(trajectory_set["train"]).transpose(1, 0)
     print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
+    print(f"Train trajectories shape: {train_trajectories.shape}")
     
     probe_trajectories = np.concatenate([typical_trajectories, noisy_trajectories], axis=0)
     targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(noisy_trajectories))])
@@ -1348,7 +1349,7 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
             loss_vals.append(example_losses.clone().cpu())
 
         # B = nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajectory_set, ex_idx)
-        ex_trajs = np.array([trajectory_set[i] for i in ex_idx])
+        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
         B = clf.predict(ex_trajs)  # 1 means noisy
         B = torch.from_numpy(np.array(B)).to(device)
         B[B <= 1e-4] = 1e-4
@@ -1405,7 +1406,7 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
     # Sort the loss list
     sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
     for i in range(len(example_idx)):
-        assert example_idx[i] is None
+        assert sorted_loss_list[example_idx[i]] is None
         sorted_loss_list[example_idx[i]] = loss_vals[i]
     assert not any([x is None for x in sorted_loss_list])
     
@@ -1415,6 +1416,11 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
     else:
         assert "train" in trajectory_set
         trajectory_set["train"].append(sorted_loss_list)
+
+    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+    trajectory_set["typical"].append(typical_stats["loss_vals"])
+    trajectory_set["noisy"].append(noisy_stats["loss_vals"])
 
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
