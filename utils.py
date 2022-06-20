@@ -1327,6 +1327,7 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
     n_neighbors = 20
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
+    use_probs = True
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -1350,7 +1351,12 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
 
         # B = nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajectory_set, ex_idx)
         ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-        B = clf.predict(ex_trajs)  # 1 means noisy
+        if use_probs:
+            B = clf.predict_proba(ex_trajs)  # 1 means noisy
+            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+            B = B[:, 1]  # Only take the prob for being noisy
+        else:
+            B = clf.predict(ex_trajs)  # 1 means noisy
         B = torch.from_numpy(np.array(B)).to(device)
         B[B <= 1e-4] = 1e-4
         B[B >= 1 - 1e-4] = 1 - 1e-4

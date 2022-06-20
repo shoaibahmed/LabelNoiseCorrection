@@ -112,6 +112,8 @@ def main():
                         help="Accuracy on the probes to be reached for the bootstraping to stop.")
     parser.add_argument('--use-loss-trajectories', default=False, action='store_true', 
                         help="Use the full loss trajectory instead of just point estimates for the loss")
+    parser.add_argument('--num-example-probes', type=int, default=None, 
+                        help="Number of probes to be used -- defaults to 250")
     
     args = parser.parse_args()
     
@@ -267,7 +269,11 @@ def main():
     if args.flood_test or test_detection_performance or use_probes:
         probes = {}
         tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
-        num_example_probes = 250  # 0.5% of the dataset
+        if args.num_example_probes is not None:
+            num_example_probes = args.num_example_probes
+        else:
+            num_example_probes = 250  # 0.5% of the dataset
+        print("Selected number of example probes:", num_example_probes)
         normalizer = transforms.Normalize(mean, std)
         
         indices_to_remove = []
