@@ -379,7 +379,7 @@ def main():
     probe_detection_list = []
     bmm_detection_list = []
     prob_model = None
-    trajectory_set = {"typical": [], "noisy": [], "train": []}
+    trajectory_set = {"typical": [], "corrupted": [], "noisy": [], "train": []}
     model_loaded = False
 
     for epoch in range(1, args.epochs + 1):

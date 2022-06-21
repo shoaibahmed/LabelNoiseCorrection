@@ -1486,7 +1486,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
         ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
         if use_probs:
             B = clf.predict_proba(ex_trajs)  # 1 means noisy
-            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+            assert len(B.shape) == 2 and B.shape[1] == 3, B.shape
         else:
             B = clf.predict(ex_trajs)  # 1 means noisy
         B = torch.from_numpy(np.array(B)).to(device)
