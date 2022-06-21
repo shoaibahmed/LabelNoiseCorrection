@@ -1304,7 +1304,7 @@ def nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajec
 
 
 def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader, optimizer, epoch, alpha, 
-                                              reg_term, num_classes, probes, trajectory_set):
+                                              reg_term, num_classes, probes, trajectory_set, use_probs):
     model.train()
     loss_per_batch = []
 
@@ -1327,7 +1327,6 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
     n_neighbors = 20
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
-    use_probs = True
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -1434,7 +1433,7 @@ def train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, train_loader,
 
 
 def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, train_loader, optimizer, epoch, alpha,
-                                                         reg_term, num_classes, probes, trajectory_set):
+                                                         reg_term, num_classes, probes, trajectory_set, use_probs):
     model.train()
     loss_per_batch = []
 
@@ -1460,7 +1459,6 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
     n_neighbors = 20
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
-    use_probs = True
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
