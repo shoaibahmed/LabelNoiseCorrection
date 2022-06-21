@@ -464,6 +464,10 @@ def main():
                     
                     msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
                     typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
+                    if "corrupted" in probes:
+                        msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
+                        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+                        trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
                     msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
                     noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
                     trajectory_set["typical"].append(typical_stats["loss_vals"])
@@ -529,9 +533,14 @@ def main():
                                                                                      alpha, bmm_model, bmm_model_maxLoss, bmm_model_minLoss, args.reg_term, num_classes)
                 if args.BootBeta == "HardProbes":
                     if args.use_loss_trajectories:
-                        print("\t##### Doing HARD BETA bootstrapping with loss trajectories and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
-                        loss_per_epoch, acc_train_per_epoch_i, trajectory_set = train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, idx_train_loader, optimizer, epoch,\
-                                                                                        alpha, args.reg_term, num_classes, probes, trajectory_set)
+                        if args.treat_three_sets:
+                            print("\t##### Doing HARD BETA bootstrapping with loss trajectories using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                            loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, idx_train_loader, optimizer, epoch,\
+                                                                                            alpha, args.reg_term, num_classes, probes, trajectory_set)
+                        else:
+                            print("\t##### Doing HARD BETA bootstrapping with loss trajectories and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
+                            loss_per_epoch, acc_train_per_epoch_i, trajectory_set = train_mixUp_HardBootBeta_probes_loss_traj(args, model, device, idx_train_loader, optimizer, epoch,\
+                                                                                            alpha, args.reg_term, num_classes, probes, trajectory_set)
                     elif args.treat_three_sets:
                         print("\t##### Doing HARD BETA bootstrapping with Probes using three sets and NORMAL mixup from the epoch {0} #####".format(bootstrap_ep_mixup))
                         loss_per_epoch, acc_train_per_epoch_i, prob_model = train_mixUp_HardBootBeta_probes_three_sets(args, model, device, train_loader_w_probes, optimizer, epoch,\
