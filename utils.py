@@ -1485,12 +1485,21 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
         if use_probs:
             B = clf.predict_proba(ex_trajs)  # 1 means noisy
             assert len(B.shape) == 2 and B.shape[1] == 3, B.shape
+            
+            # Compute the upweighting factor to ensure that the learning rate is not effectively going down with probs
+            clean_samples_prob = B[:, 0].sum()
+            corrupted_samples_prob = B[:, 1].sum()
+            noisy_samples_prob = B[:, 2].sum()
+            
+            # We are discarding corrupted samples, so the upweighting factor should be based on that
+            upweight_factor = (clean_samples_prob + corrupted_samples_prob + noisy_samples_prob) / (clean_samples_prob + noisy_samples_prob)
+            print("Upweighting factor:", upweight_factor)
         else:
             B = clf.predict(ex_trajs)  # 1 means noisy
         B = torch.from_numpy(np.array(B)).to(device)
         B[B <= 1e-4] = 1e-4
         B[B >= 1 - 1e-4] = 1 - 1e-4
-
+        
         output_x1 = F.log_softmax(output_x1, dim=1)
         output_x2 = output_x1[index, :]
         B2 = B[index]
@@ -1501,7 +1510,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
         # Original clean (ID == 0)
         # loss_x1_vec = (1 - B) * F.nll_loss(output, targets_1, reduction='none')
         if use_probs:
-            loss_x1_vec = B[:, 0] * F.nll_loss(output, targets_1, reduction='none')
+            loss_x1_vec = upweight_factor * B[:, 0] * F.nll_loss(output, targets_1, reduction='none')
         else:
             loss_x1_vec = F.nll_loss(output[B == 0], targets_1[B == 0], reduction='none')
         loss_x1 = torch.sum(loss_x1_vec) / len(loss_x1_vec)
@@ -1510,7 +1519,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
         # loss_x1_pred_vec = B * F.nll_loss(output, z1, reduction='none')
         # loss_x1_pred = torch.sum(loss_x1_pred_vec) / len(loss_x1_pred_vec)
         if use_probs:
-            loss_x1_pred_vec = B[:, 2] * F.nll_loss(output, z1, reduction='none')
+            loss_x1_pred_vec = upweight_factor * B[:, 2] * F.nll_loss(output, z1, reduction='none')
         else:
             loss_x1_pred_vec = F.nll_loss(output[B == 2], z1[B == 2], reduction='none')
         loss_x1_pred = torch.sum(loss_x1_pred_vec) / len(output)
@@ -1519,7 +1528,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
         # loss_x2_vec = (1 - B2) * F.nll_loss(output, targets_2, reduction='none')
         # loss_x2 = torch.sum(loss_x2_vec) / len(loss_x2_vec)
         if use_probs:
-            loss_x2_vec = B2[:, 0] * F.nll_loss(output, targets_2, reduction='none')
+            loss_x2_vec = upweight_factor * B2[:, 0] * F.nll_loss(output, targets_2, reduction='none')
         else:
             loss_x2_vec = F.nll_loss(output[B2 == 0], targets_2[B2 == 0], reduction='none')
         loss_x2 = torch.sum(loss_x2_vec) / len(output)
@@ -1528,7 +1537,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
         # loss_x2_pred_vec = B2 * F.nll_loss(output, z2, reduction='none')
         # loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(loss_x2_pred_vec)
         if use_probs:
-            loss_x2_pred_vec = B2[:, 2] * F.nll_loss(output, z2, reduction='none')
+            loss_x2_pred_vec = upweight_factor * B2[:, 2] * F.nll_loss(output, z2, reduction='none')
         else:
             loss_x2_pred_vec = F.nll_loss(output[B2 == 2], z2[B2 == 2], reduction='none')
         loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(output)
