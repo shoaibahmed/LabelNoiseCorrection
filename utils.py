@@ -1459,6 +1459,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
     n_neighbors = 20
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
+    use_upweighting = False
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -1491,9 +1492,11 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
             corrupted_samples_prob = B[:, 1].sum()
             noisy_samples_prob = B[:, 2].sum()
             
-            # We are discarding corrupted samples, so the upweighting factor should be based on that
-            upweight_factor = (clean_samples_prob + corrupted_samples_prob + noisy_samples_prob) / (clean_samples_prob + noisy_samples_prob)
-            print("Upweighting factor:", upweight_factor)
+            upweight_factor = 1.
+            if use_upweighting:  # We are discarding corrupted samples, so the upweighting factor should be based on that
+                upweight_factor = (clean_samples_prob + corrupted_samples_prob + noisy_samples_prob) / (clean_samples_prob + noisy_samples_prob)
+            
+            print(f"Clean prob: {clean_samples_prob/len(B):.4f} / Corrupted prob: {corrupted_samples_prob/len(B):.4f} / Noisy prob: {noisy_samples_prob/len(B):.4f} / Upweighting factor: {upweight_factor:.4f}")
         else:
             B = clf.predict(ex_trajs)  # 1 means noisy
         B = torch.from_numpy(np.array(B)).to(device)
