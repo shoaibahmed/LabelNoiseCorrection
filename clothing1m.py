@@ -96,6 +96,9 @@ class Clothing1M(Dataset):
             "Vest",
             "Underwear",
         ]
+        
+        # Convert labels to targets
+        self.targets = np.array([self.labels[k] for k in self.imgs])
 
     def indicate_clean(self, indices):
         if self.percent_clean is not None:
@@ -119,7 +122,8 @@ class Clothing1M(Dataset):
 
     def __getitem__(self, idx):
         img_path = self.imgs[idx]
-        target = self.labels[img_path]
+        # target = self.labels[img_path]
+        target = self.targets[idx]
 
         image = Image.open(img_path).convert("RGB")
         img = self.transform(image)

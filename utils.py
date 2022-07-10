@@ -51,6 +51,34 @@ class IdxDataset(torch.utils.data.Dataset):
         return self.dataset[idx], idx
 
 
+class ModelWithFeatures(torch.nn.Module):
+    def __init__(self, model, use_projection_head=False, feat_dim=None):
+        super().__init__()
+        self.model = model
+        self.fc_layer = model.fc
+        self.model.fc = torch.nn.Identity()
+        
+        self.projection_head = None
+        if use_projection_head:
+            assert feat_dim is not None
+            print("Using projection head with Supervised Contrastive loss...")
+            self.projection_head = torch.nn.Sequential(
+            torch.nn.Linear(feat_dim, feat_dim),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Linear(feat_dim, feat_dim)
+        )
+    
+    def forward(self, x, return_features=False):
+        features = self.model(x)
+        logits = self.fc_layer(features)
+        if not return_features:
+            return logits
+        
+        if self.projection_head is not None:
+            features = self.projection_head(features)
+        return features, logits
+
+
 ######################### Get data and noise adding ##########################
 def get_data_cifar(loader):
     data = loader.sampler.data_source.train_data.copy()

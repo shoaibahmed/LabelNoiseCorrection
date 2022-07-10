@@ -19,6 +19,7 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import auc
 import sys
 sys.path.append('../')
+
 from utils import *
 from clothing1m import Clothing1M
 
@@ -189,7 +190,12 @@ def main():
     train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     train_loader_track = torch.utils.data.DataLoader(trainset_track, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-    model = PreResNet.ResNet18(num_classes=num_classes, ssl_training=ssl_training).to(device)
+    if args.dataset == "Clothing1M":
+        print("Using ResNet-50...")
+        model = models.resnet50(num_classes=num_classes).to(device)
+        model = ModelWithFeatures(model)  # Returns model features as well
+    else:
+        model = PreResNet.ResNet18(num_classes=num_classes, ssl_training=ssl_training).to(device)
 
     milestones = args.M
 
@@ -200,38 +206,49 @@ def main():
     post_proc_transform = None
     available_indices = None
     
-    if args.use_three_sets:
-        # Ensure that the labels change and the input noise is mutually exclusive
-        print("!! Generating three different sets in the dataset...")
-        # assert post_proc_transform is not None
-        assert args.noise_level < 50.
-        noised_input_idx = add_input_noise_cifar_w(train_loader, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
-        _ = add_input_noise_cifar_w(train_loader_track, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
+    if args.dataset == "Clothing1M":
+        assert args.noise_level == 0.0, f"Noise level should be set to zero for clothing1M dataset (provided noise level={args.noise_level})"
+        available_indices = [i for i in range(len(train_loader.dataset))]
+        print("!! Not adding noise for clothing1M dataset...")
         
-        labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
-        noisy_labels, noised_label_idx = add_noise_cifar_w_new(train_loader, args.noise_level, noised_input_idx)  # it changes the labels in the train loader directly
-        noisy_labels_track, noised_label_idx_track = add_noise_cifar_w_new(train_loader_track, args.noise_level, noised_input_idx)
-        
-        available_indices = [i for i in range(len(labels)) if i not in noised_input_idx and i not in noised_label_idx]
-        print("Number of available indices:", len(available_indices))
-        
-        # Three sets have to be: corrupted -> noisy ; noisy -> mislabaled
-        args.use_mislabeled_examples = True
-    
+        # path where experiments are saved
+        exp_path = os.path.join('./', 'prioritized_training_PreResNet18_{0}'.format(args.experiment_name))
     else:
-        print("!! Using the default label noise pipeline...")
-        assert post_proc_transform is None
-        labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
-        noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
-        noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
+        if args.use_three_sets:
+            # Ensure that the labels change and the input noise is mutually exclusive
+            print("!! Generating three different sets in the dataset...")
+            # assert post_proc_transform is not None
+            assert args.noise_level < 50.
+            noised_input_idx = add_input_noise_cifar_w(train_loader, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
+            _ = add_input_noise_cifar_w(train_loader_track, args.noise_level, post_proc_transform=None)  # it changes the labels in the train loader directly
+            
+            labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
+            noisy_labels, noised_label_idx = add_noise_cifar_w_new(train_loader, args.noise_level, noised_input_idx)  # it changes the labels in the train loader directly
+            noisy_labels_track, noised_label_idx_track = add_noise_cifar_w_new(train_loader_track, args.noise_level, noised_input_idx)
+            
+            available_indices = [i for i in range(len(labels)) if i not in noised_input_idx and i not in noised_label_idx]
+            print("Number of available indices:", len(available_indices))
+            
+            # Three sets have to be: corrupted -> noisy ; noisy -> mislabaled
+            args.use_mislabeled_examples = True
         
-        # Unchanged indices
-        # TODO: Further filter the scores based on which examples are available
-        available_indices = [i for i in range(len(labels)) if labels[i] == noisy_labels[i]]
+        else:
+            print("!! Using the default label noise pipeline...")
+            assert post_proc_transform is None
+            labels = get_data_cifar_2(train_loader_track)  # it should be "clonning"
+            noisy_labels = add_noise_cifar_w(train_loader, args.noise_level)  # it changes the labels in the train loader directly
+            noisy_labels_track = add_noise_cifar_w(train_loader_track, args.noise_level)
+            
+            # Unchanged indices
+            # TODO: Further filter the scores based on which examples are available
+            available_indices = [i for i in range(len(labels)) if labels[i] == noisy_labels[i]]
     
-    noisy_labels = torch.Tensor(noisy_labels)
-    misclassified_instances = labels != noisy_labels
-    print(f"Percentage of changed instances: {torch.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({torch.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
+        noisy_labels = torch.Tensor(noisy_labels)
+        misclassified_instances = labels != noisy_labels
+        print(f"Percentage of changed instances: {torch.sum(misclassified_instances)/float(len(misclassified_instances))*100.:2f}% ({torch.sum(misclassified_instances)}/{len(misclassified_instances)}) / Noise: {args.noise_level}")
+        
+        # path where experiments are saved
+        exp_path = os.path.join('./', 'noise_models_PreResNet18_{0}'.format(args.experiment_name), str(args.noise_level))
     
     assert not args.dynamic_flood_thresh or args.flood_test
     if args.flood_test:
@@ -239,9 +256,6 @@ def main():
         assert args.BootBeta == "None"
         assert args.Mixup in ["None", "Flooding"]
         print("Using flooding test...")
-
-    # path where experiments are saved
-    exp_path = os.path.join('./', 'noise_models_PreResNet18_{0}'.format(args.experiment_name), str(args.noise_level))
 
     if not os.path.isdir(exp_path):
         os.makedirs(exp_path)
@@ -292,7 +306,10 @@ def main():
     
     if args.flood_test or test_detection_performance or use_probes:
         probes = {}
-        tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
+        if args.dataset == "Clothing1M":
+            tensor_shape = (3, 224, 224)
+        else:
+            tensor_shape = (3, 32, 32)  # For both CIFAR-10/100
         if args.num_example_probes is not None:
             num_example_probes = args.num_example_probes
         else:
