@@ -135,19 +135,28 @@ def main():
         random.seed(args.seed)  # python seed for image transformation
 
     if args.dataset == 'Clothing1M':
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+        
+        transform_clean = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ])
+        
         transform_train = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.CenterCrop(224),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            transforms.Normalize(mean, std),
         ])
         
         transform_test = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            transforms.Normalize(mean, std),
         ])
     else:
         assert args.dataset in ['CIFAR10', 'CIFAR100']
@@ -182,6 +191,7 @@ def main():
         trainset = Clothing1M(root=args.root_dir, mode='dirty_train', transform=transform_train)
         trainset_track = Clothing1M(root=args.root_dir, mode='dirty_train', transform=transform_train)
         testset = Clothing1M(root=args.root_dir, mode='test', transform=transform_test)
+        trainset_clean_transform = Clothing1M(root=args.root_dir, mode='dirty_train', transform=transform_clean)
         num_classes = 14
     else:
         raise NotImplementedError
@@ -326,9 +336,13 @@ def main():
             selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
             assert len(np.unique(selected_indices)) == len(selected_indices)
             
-            transforms_clean = transforms.ToTensor()
-            images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
-            probes["noisy"] = torch.stack([transforms_clean(x) for x in images], dim=0)
+            if args.dataset == "Clothing1M":
+                images = [trainset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
+                probes["noisy"] = torch.stack(images, dim=0)
+            else:
+                transforms_clean = transforms.ToTensor()
+                images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
+                probes["noisy"] = torch.stack([transforms_clean(x) for x in images], dim=0)
             print("Selected image shape:", probes["noisy"].shape)
             
             # Update available indices
@@ -366,9 +380,14 @@ def main():
             selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
             assert len(np.unique(selected_indices)) == len(selected_indices)
             
-            images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
-            probes["typical"] = torch.stack([transforms_clean(x) for x in images], dim=0).to(device)
-            probes[f"typical_labels"] = torch.tensor([train_loader.sampler.data_source.targets[i] for i in selected_indices], dtype=torch.int64).to(device)
+            if args.dataset == "Clothing1M":
+                images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
+                probes["typical"] = torch.stack([x[0] for x in images], dim=0)
+                probes[f"typical_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
+            else:
+                images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
+                probes["typical"] = torch.stack([transforms_clean(x) for x in images], dim=0).to(device)
+                probes[f"typical_labels"] = torch.tensor([train_loader.sampler.data_source.targets[i] for i in selected_indices], dtype=torch.int64).to(device)
             print("Selected image shape:", probes["typical"].shape)
             
             indices_to_remove += [i for i in selected_indices]
@@ -378,9 +397,14 @@ def main():
             print(f"Dataset before deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
             print("Number of indices to be removed:", len(indices_to_remove))
             num_total_examples = len(trainset)
-            trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in indices_to_remove]
-            trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in indices_to_remove]
-            misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in indices_to_remove]
+            if args.dataset == "Clothing1M":
+                trainset.imgs = [trainset.imgs[i] for i in range(num_total_examples) if i not in indices_to_remove]
+                trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in indices_to_remove]
+                misclassified_instances = [False for i in range(num_total_examples) if i not in indices_to_remove]  # Don't have this explicit information
+            else:
+                trainset.data = [trainset.data[i] for i in range(num_total_examples) if i not in indices_to_remove]
+                trainset.targets = [trainset.targets[i] for i in range(num_total_examples) if i not in indices_to_remove]
+                misclassified_instances = [misclassified_instances[i] for i in range(num_total_examples) if i not in indices_to_remove]
             
             # Reinitialize the dataloader to generate the right indices for sampler
             train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
