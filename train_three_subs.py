@@ -20,6 +20,7 @@ from sklearn.metrics import auc
 import sys
 sys.path.append('../')
 from utils import *
+from clothing1m import Clothing1M
 
 
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
@@ -38,7 +39,7 @@ def main():
                         help='number of epochs to train, default: 10')
     parser.add_argument('--lr', type=float, default=0.1,
                         help='initial learning rate, default: 0.1')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'], help='dataset to train on, default: CIFAR10')
+    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'Clothing1M'], help='dataset to train on, default: CIFAR10')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='SGD momentum, default: 0.9')
     parser.add_argument('--no-cuda', action='store_true', default=False,
@@ -132,21 +133,39 @@ def main():
 
         random.seed(args.seed)  # python seed for image transformation
 
-    # CIFAR meta
-    mean = [0.4914, 0.4822, 0.4465]
-    std = [0.2023, 0.1994, 0.2010]
-    
-    transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std),
-    ])
+    if args.dataset == 'Clothing1M':
+        transform_train = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.CenterCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        
+        transform_test = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+    else:
+        assert args.dataset in ['CIFAR10', 'CIFAR100']
+        
+        # CIFAR meta
+        mean = [0.4914, 0.4822, 0.4465]
+        std = [0.2023, 0.1994, 0.2010]
+        
+        transform_train = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ])
 
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std),
-    ])
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ])
 
     if args.dataset == 'CIFAR10':
         trainset = datasets.CIFAR10(root=args.root_dir, train=True, download=True, transform=transform_train)
@@ -158,6 +177,11 @@ def main():
         trainset_track = datasets.CIFAR100(root=args.root_dir, train=True, transform=transform_train)
         testset = datasets.CIFAR100(root=args.root_dir, train=False, transform=transform_test)
         num_classes = 100
+    elif args.dataset == 'Clothing1M':
+        trainset = Clothing1M(root=args.root_dir, mode='dirty_train', transform=transform_train)
+        trainset_track = Clothing1M(root=args.root_dir, mode='dirty_train', transform=transform_train)
+        testset = Clothing1M(root=args.root_dir, mode='test', transform=transform_test)
+        num_classes = 14
     else:
         raise NotImplementedError
     ssl_training = args.ssl_training
@@ -464,7 +488,7 @@ def main():
                     
                     msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
                     typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
-                    if "corrupted" in probes:
+                    if "corrupted" in probes and len(probes["corrupted"]) > 0 and "corrupted_labels" in probes:
                         msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
                         corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
                         trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])

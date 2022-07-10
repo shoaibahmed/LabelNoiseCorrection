@@ -8,6 +8,7 @@ class Clothing1M(Dataset):
     r"""https://github.com/LiJunnan1992/MLNT"""
 
     def __init__(self, root, mode, transform=None, percent_clean=None):
+        assert mode in ["dirty_train", "val", "test"]  # Prior work trained on dirty_train
         self.root = root
         self.anno_dir = os.path.join(self.root, "annotations")
         self.transform = transform
