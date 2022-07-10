@@ -1460,6 +1460,9 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
     use_upweighting = False
+    
+    use_corrupted_inputs = True
+    corrupted_weight = 0.5
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -1545,7 +1548,29 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
             loss_x2_pred_vec = F.nll_loss(output[B2 == 2], z2[B2 == 2], reduction='none')
         loss_x2_pred = torch.sum(loss_x2_pred_vec) / len(output)
         
-        loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
+        if use_corrupted_inputs:  # for corrupted inputs
+            if use_probs:
+                loss_x1_noisy_target_vec = corrupted_weight * B[:, 1] * F.nll_loss(output, targets_1, reduction='none')
+                # loss_x1_noisy_pred_vec = corrupted_weight * B[:, 1] * F.nll_loss(output, z1, reduction='none')
+                
+                loss_x2_noisy_target_vec = corrupted_weight * B2[:, 1] * F.nll_loss(output, targets_2, reduction='none')
+                # loss_x2_noisy_pred_vec = corrupted_weight * B2[:, 1] * F.nll_loss(output, z2, reduction='none')
+                
+            else:
+                loss_x1_noisy_target_vec = corrupted_weight * F.nll_loss(output[B == 1], targets_1[B == 1], reduction='none')
+                # loss_x1_noisy_pred_vec = corrupted_weight * F.nll_loss(output[B == 1], z1[B == 1], reduction='none')
+                
+                loss_x2_noisy_target_vec = corrupted_weight * F.nll_loss(output[B2 == 1], targets_2[B2 == 1], reduction='none')
+                # loss_x2_noisy_pred_vec = corrupted_weight * F.nll_loss(output[B2 == 1], z2[B2 == 1], reduction='none')
+
+            # loss_x1_noisy_pred = torch.sum(loss_x1_noisy_pred_vec) / len(output)
+            # loss_x2_noisy_pred = torch.sum(loss_x2_noisy_pred_vec) / len(output)
+            loss_x1_noisy_target = torch.sum(loss_x1_noisy_target_vec) / len(output)
+            loss_x2_noisy_target = torch.sum(loss_x2_noisy_target_vec) / len(output)
+
+            loss = lam*(loss_x1 + loss_x1_pred + loss_x1_noisy_target) + (1-lam)*(loss_x2 + loss_x2_pred + loss_x2_noisy_target)
+        else:
+            loss = lam*(loss_x1 + loss_x1_pred) + (1-lam)*(loss_x2 + loss_x2_pred)
 
         loss_reg = reg_loss_class(tab_mean_class, num_classes)
         loss = loss + reg_term*loss_reg
