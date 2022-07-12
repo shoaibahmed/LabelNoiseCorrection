@@ -56,6 +56,12 @@ def main():
     parser.add_argument('--alpha', type=float, default=32, help='alpha parameter for the mixup distribution, default: 32')
     parser.add_argument('--M', nargs='+', type=int, default=[100, 250],
                         help="Milestones for the LR sheduler, default 100 250")
+    parser.add_argument('--no-milestones', action="store_true", default=False,
+                        help="Don't use LR milestones")
+    parser.add_argument('--optimizer', type=str, choices=["sgd", "adam", "adamw"], default="sgd",
+                        help="Optimizer to use")
+    parser.add_argument('--weight-decay', type=float, default=1e-4,
+                        help="Weight decay")
     parser.add_argument('--Mixup', type=str, default='None', choices=['None', 'Static', 'Dynamic', 'Flooding'],
                         help="Type of bootstrapping. Available: 'None' (deactivated)(default), \
                                 'Static' (as in the paper), 'Dynamic' (BMM to mix the smaples, will use decreasing softmax), default: None")
@@ -207,10 +213,22 @@ def main():
     else:
         model = PreResNet.ResNet18(num_classes=num_classes, ssl_training=ssl_training).to(device)
 
-    milestones = args.M
-
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
+    if args.optimizer == "sgd":
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+        print(f"Using SGD as the optimizer w/ LR={args.lr} / Momentum: {args.momentum} / Weight-decay: {args.weight_decay}")
+    elif args.optimizer == "adam":
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        print(f"Using Adam as the optimizer w/ LR={args.lr} / Weight-decay: {args.weight_decay}")
+    else:
+        assert args.optimizer == "adamw"
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        print(f"Using AdamW as the optimizer w/ LR={args.lr} / Weight-decay: {args.weight_decay}")
+    
+    scheduler = None
+    if not args.no_milestones:
+        milestones = args.M
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
+        print("Using LR scheduler with milestones:", milestones)
 
     noised_input_idx = None
     post_proc_transform = None
@@ -285,15 +303,18 @@ def main():
                 print("Recreated the output directory after deleting old results...")
     bmm_model=bmm_model_maxLoss=bmm_model_minLoss=cont=k = 0
 
-    bootstrap_ep_std = milestones[0] + 5 + 1 # the +1 is because the conditions are defined as ">" or "<" not ">="
-    guidedMixup_ep = 106
+    if not args.no_milestones:
+        bootstrap_ep_std = milestones[0] + 5 + 1 # the +1 is because the conditions are defined as ">" or "<" not ">="
+        guidedMixup_ep = 106
 
     if args.Mixup == 'Dynamic':
+        assert not args.no_milestones
         bootstrap_ep_mixup = guidedMixup_ep + 5
     else:
         if args.bootstrap_epochs is not None:
             bootstrap_ep_mixup = int(args.bootstrap_epochs) + 1
         else:
+            assert not args.no_milestones
             bootstrap_ep_mixup = milestones[0] + 5 + 1
     print("Using bootstrap epochs to be:", bootstrap_ep_mixup)
 
@@ -449,7 +470,8 @@ def main():
 
     for epoch in range(1, args.epochs + 1):
         # train
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
         
         ### Standard CE training (without mixup) ###
         if args.Mixup in ["None", "Flooding"]:
