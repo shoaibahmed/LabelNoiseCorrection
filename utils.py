@@ -460,7 +460,7 @@ def train_CrossEntropy_traj(args, model, device, train_loader, optimizer, epoch,
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                        100. * batch_idx / len(train_loader), loss.item(),
                        100. * correct / total,
-                optimizer.param_groups[0]['lr']), len(data))
+                optimizer.param_groups[0]['lr'], len(data)))
 
     if selection_batch_size is not None:  # Some samples are empty otherwise
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
@@ -576,7 +576,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                        100. * batch_idx / len(train_loader), loss.item(),
                        100. * correct / ((batch_idx + 1) * args.batch_size),
-                optimizer.param_groups[0]['lr']), len(data))
+                optimizer.param_groups[0]['lr'], len(data)))
 
     if selection_batch_size is not None:
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()

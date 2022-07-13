@@ -122,8 +122,8 @@ def main():
                         help="Use the full loss trajectory instead of just point estimates for the loss")
     parser.add_argument('--num-example-probes', type=int, default=None, 
                         help="Number of probes to be used -- defaults to 250")
-    parser.add_argument('--store-loss-trajectories', action="store_true", default=False, 
-                        help="Store loss trajectories for identification")
+    # parser.add_argument('--store-loss-trajectories', action="store_true", default=False, 
+    #                     help="Store loss trajectories for identification")
     
     args = parser.parse_args()
     
@@ -133,7 +133,7 @@ def main():
     assert not args.use_loss_trajectories or not args.use_unmodified_train_set_for_pretraining
     assert not args.use_loss_trajectories or args.use_probes_for_pretraining
     assert not args.use_loss_trajectories or args.use_gmm_probe_identification
-    assert not args.store_loss_trajectories or args.dataset == "Clothing1M"
+    # assert not args.store_loss_trajectories or args.dataset == "Clothing1M"
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -481,6 +481,9 @@ def main():
         noisy_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_noisy" else 0 for i in range(len(idx_dataset))])
         clean_train_instances = np.sum([1 if dataset_probe_identity[i] == "train_clean" else 0 for i in range(len(idx_dataset))])
         print(f"Total instances: {total_instances} / Typical probe instances: {typical_probe_instances} / Corrupted probe instances: {corrupted_probe_instances} / Noisy probe instances: {noisy_probe_instances} / Noisy train instances: {noisy_train_instances} / Clean train instances: {clean_train_instances}")
+    else:
+        idx_dataset = IdxDataset(trainset, None)
+        idx_train_loader = torch.utils.data.DataLoader(idx_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
 
     probe_detection_list = []
     bmm_detection_list = []
@@ -557,9 +560,8 @@ def main():
             else:
                 if args.selection_batch_size is not None:
                     # Executes the new loss trajectory functions without mixup for prioritized training
-                    assert args.use_loss_trajectories
                     if args.BootBeta == "None":
-                        if args.store_loss_trajectories:
+                        if args.use_loss_trajectories:
                             print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
                             trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set)
                             assert probes is not None
