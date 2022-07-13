@@ -7,12 +7,10 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import torch.nn.functional as F
 import PreResNet
-import math
 import torchvision.models as models
 import random
 import os
 import shutil
-import copy
 import numpy as np
 import pickle
 from matplotlib import pyplot as plt
@@ -489,6 +487,7 @@ def main():
     prob_model = None
     trajectory_set = {"typical": [], "corrupted": [], "noisy": [], "train": []}
     model_loaded = False
+    traj_output_file = os.path.join(exp_path, f'{args.dataset.lower()}_loss_trajectories.pkl')
 
     for epoch in range(1, args.epochs + 1):
         # train
@@ -557,7 +556,7 @@ def main():
                             current_iter = 0
             else:
                 if args.selection_batch_size is not None:
-                    # TODO: Implement the new loss trajectory functions without mixup here
+                    # Executes the new loss trajectory functions without mixup for prioritized training
                     assert args.use_loss_trajectories
                     if args.BootBeta == "None":
                         if args.store_loss_trajectories:
@@ -576,15 +575,33 @@ def main():
                             trajectory_set["typical"].append(typical_stats["loss_vals"])
                             trajectory_set["noisy"].append(noisy_stats["loss_vals"])
                             
-                            # TODO: Decide if you want to save the trajectories here
+                            # Save the trajectories in the last epoch
+                            if epoch == args.epoch:
+                                print("Saving the loss trajectories in the last iteration...")
+                                with open(traj_output_file, 'wb') as fp:
+                                    pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
+                                    print("Data saved to output file:", traj_output_file)
                         else:
                             print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
                             trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
                                                                      selection_batch_size=args.selection_batch_size)
                     else:
                         assert args.BootBeta == "HardProbes"
-                        # TODO: Include the label correction function here
-                    raise NotImplementedError
+                        if epoch == 1:  # Load only in the first epoch
+                            print("Loading trajectory set from file:", traj_output_file)
+                            with open(traj_output_file, 'rb') as fp:
+                                trajectory_set = pickle.load(fp)
+                                print("Trajectories loaded successfully...")
+                                typical_traj = np.array(trajectory_set["typical"]).transpose(1, 0)
+                                noisy_traj = np.array(trajectory_set["noisy"]).transpose(1, 0)
+                                train_traj = np.array(trajectory_set["train"]).transpose(1, 0)
+                                print(f"Trajectories shape / Train: {train_traj.shape} / Typical: {typical_traj.shape} / Noisy: {noisy_traj.shape}")
+                        
+                        # Execute the label correction scheme
+                        train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term, 
+                                                                         num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                         selection_batch_size=args.selection_batch_size)
+                
                 else:
                     print('\t##### Doing standard training with cross-entropy loss #####')
                     loss_per_epoch, acc_train_per_epoch_i = train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_ssl=ssl_training)

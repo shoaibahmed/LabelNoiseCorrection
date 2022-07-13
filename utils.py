@@ -483,7 +483,8 @@ def train_CrossEntropy_traj(args, model, device, train_loader, optimizer, epoch,
 
 
 def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_loader, optimizer, epoch,
-                                                     reg_term, num_classes, probes, trajectory_set, use_probs):
+                                                     reg_term, num_classes, probes, trajectory_set, use_probs,
+                                                     selection_batch_size=None):
     model.train()
     loss_per_batch = []
 
@@ -568,31 +569,32 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
                        100. * correct / ((batch_idx + 1) * args.batch_size),
                 optimizer.param_groups[0]['lr']))
 
-    example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
-    loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
-    
-    # Sort the loss list
-    sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
-    for i in range(len(example_idx)):
-        assert sorted_loss_list[example_idx[i]] is None
-        sorted_loss_list[example_idx[i]] = loss_vals[i]
-    assert not any([x is None for x in sorted_loss_list])
-    
-    # Append the loss list to loss trajectory
-    if trajectory_set is None:
-        trajectory_set = dict(train=[sorted_loss_list])
-    else:
-        assert "train" in trajectory_set
-        trajectory_set["train"].append(sorted_loss_list)
+    if selection_batch_size is not None:
+        example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+        loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+        
+        # Sort the loss list
+        sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+        for i in range(len(example_idx)):
+            assert sorted_loss_list[example_idx[i]] is None
+            sorted_loss_list[example_idx[i]] = loss_vals[i]
+        assert not any([x is None for x in sorted_loss_list])
+        
+        # Append the loss list to loss trajectory
+        if trajectory_set is None:
+            trajectory_set = dict(train=[sorted_loss_list])
+        else:
+            assert "train" in trajectory_set
+            trajectory_set["train"].append(sorted_loss_list)
 
-    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
-    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
-    trajectory_set["typical"].append(typical_stats["loss_vals"])
-    trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+        trajectory_set["typical"].append(typical_stats["loss_vals"])
+        trajectory_set["noisy"].append(noisy_stats["loss_vals"])
 
-    loss_per_epoch = [np.average(loss_per_batch)]
-    acc_train_per_epoch = [np.average(acc_train_per_batch)]
-    return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
+        loss_per_epoch = [np.average(loss_per_batch)]
+        acc_train_per_epoch = [np.average(acc_train_per_batch)]
+        return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
 
 
 ##############################################################################
