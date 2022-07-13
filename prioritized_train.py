@@ -131,8 +131,8 @@ def main():
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     assert not args.use_loss_trajectories or not args.use_unmodified_train_set_for_pretraining
-    assert not args.use_loss_trajectories or args.use_probes_for_pretraining
-    assert not args.use_loss_trajectories or args.use_gmm_probe_identification
+    assert not args.use_loss_trajectories or args.use_probes_for_pretraining or args.dataset == "Clothing1M"
+    assert not args.use_loss_trajectories or args.use_gmm_probe_identification or args.dataset == "Clothing1M"
     # assert not args.store_loss_trajectories or args.dataset == "Clothing1M"
     
     if args.seed:
