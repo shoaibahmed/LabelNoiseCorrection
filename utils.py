@@ -430,7 +430,8 @@ def train_CrossEntropy_traj(args, model, device, train_loader, optimizer, epoch,
         
         if selection_batch_size is not None:  # Uniform sample selection
             assert isinstance(selection_batch_size, int)
-            data = torch.randperm(len(data))[:selection_batch_size]
+            selected_indices = torch.randperm(len(data))[:selection_batch_size]
+            data, target = data[selected_indices], target[selected_indices]
         
         output = model(data, return_features=False)
         output = F.log_softmax(output, dim=1)
@@ -511,44 +512,52 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
+        
+        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+        if selection_batch_size is not None:  # Uniform sample selection
+            assert use_probs
+            assert isinstance(selection_batch_size, int)
+            B = clf.predict_proba(ex_trajs)  # 1 means noisy
+            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+            B = B[:, 0]  # Only take the prob for being noisy
+            
+            # Select examples with the highest probablity of being typical
+            selected_indices = torch.argsort(B, descending=True)[:selection_batch_size]
+            data, target = data[selected_indices], target[selected_indices]
+        else:
+            if use_probs:
+                B = clf.predict_proba(ex_trajs)  # 1 means noisy
+                assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+                B = B[:, 1]  # Only take the prob for being noisy
+            else:
+                B = clf.predict(ex_trajs)  # 1 means noisy
+            B = torch.from_numpy(np.array(B)).to(device)
+            B[B <= 1e-4] = 1e-4
+            B[B >= 1 - 1e-4] = 1 - 1e-4
 
         output = model(data, return_features=False)
         output = F.log_softmax(output, dim=1)
-
-        example_loss = F.nll_loss(output, target, reduction='none')
-        loss = example_loss.mean()
-        
-        # Compute individual example losses
-        with torch.no_grad():
-            example_idx.append(ex_idx.clone().cpu())
-            loss_vals.append(example_loss.clone().cpu())
-
-        # B = nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajectory_set, ex_idx)
-        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-        if use_probs:
-            B = clf.predict_proba(ex_trajs)  # 1 means noisy
-            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-            B = B[:, 1]  # Only take the prob for being noisy
-        else:
-            B = clf.predict(ex_trajs)  # 1 means noisy
-        B = torch.from_numpy(np.array(B)).to(device)
-        B[B <= 1e-4] = 1e-4
-        B[B >= 1 - 1e-4] = 1 - 1e-4
-
-        output = F.log_softmax(output, dim=1)
-
         pred = torch.max(output, dim=1)[1]
-        
-        loss_target_vec = (1 - B) * F.nll_loss(output, target, reduction='none')
-        loss_target = torch.sum(loss_target_vec) / len(loss_target_vec)
 
-        loss_pred_vec = B * F.nll_loss(output, pred, reduction='none')
-        loss_pred = torch.sum(loss_pred_vec) / len(loss_pred_vec)
+        if selection_batch_size is None:
+            # Compute individual example losses
+            with torch.no_grad():
+                example_loss = F.nll_loss(output, target, reduction='none')
+                example_idx.append(ex_idx.clone().cpu())
+                loss_vals.append(example_loss.clone().cpu())
 
-        loss = loss_target + loss_pred
+            loss_target_vec = (1 - B) * F.nll_loss(output, target, reduction='none')
+            loss_target = torch.sum(loss_target_vec) / len(loss_target_vec)
 
-        # loss_reg = reg_loss_class(tab_mean_class, num_classes)
-        # loss = loss + reg_term*loss_reg
+            loss_pred_vec = B * F.nll_loss(output, pred, reduction='none')
+            loss_pred = torch.sum(loss_pred_vec) / len(loss_pred_vec)
+
+            loss = loss_target + loss_pred
+
+            # loss_reg = reg_loss_class(tab_mean_class, num_classes)
+            # loss = loss + reg_term*loss_reg
+        else:
+            loss_target = F.nll_loss(output, target)
 
         loss.backward()
 
@@ -563,11 +572,11 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
         acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
 
         if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}, # examples: {:d}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                        100. * batch_idx / len(train_loader), loss.item(),
                        100. * correct / ((batch_idx + 1) * args.batch_size),
-                optimizer.param_groups[0]['lr']))
+                optimizer.param_groups[0]['lr']), len(data))
 
     if selection_batch_size is not None:
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
