@@ -124,6 +124,8 @@ def main():
                         help="Use the full loss trajectory instead of just point estimates for the loss")
     parser.add_argument('--num-example-probes', type=int, default=None, 
                         help="Number of probes to be used -- defaults to 250")
+    parser.add_argument('--store-loss-trajectories', action="store_true", default=False, 
+                        help="Store loss trajectories for identification")
     
     args = parser.parse_args()
     
@@ -133,6 +135,7 @@ def main():
     assert not args.use_loss_trajectories or not args.use_unmodified_train_set_for_pretraining
     assert not args.use_loss_trajectories or args.use_probes_for_pretraining
     assert not args.use_loss_trajectories or args.use_gmm_probe_identification
+    assert not args.store_loss_trajectories or args.dataset == "Clothing1M"
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -555,6 +558,32 @@ def main():
             else:
                 if args.selection_batch_size is not None:
                     # TODO: Implement the new loss trajectory functions without mixup here
+                    assert args.use_loss_trajectories
+                    if args.BootBeta == "None":
+                        if args.store_loss_trajectories:
+                            print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
+                            trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set)
+                            assert probes is not None
+                            
+                            msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
+                            typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
+                            if "corrupted" in probes and len(probes["corrupted"]) > 0 and "corrupted_labels" in probes:
+                                msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
+                                corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+                                trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
+                            msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
+                            noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
+                            trajectory_set["typical"].append(typical_stats["loss_vals"])
+                            trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+                            
+                            # TODO: Decide if you want to save the trajectories here
+                        else:
+                            print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
+                            trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
+                                                                     selection_batch_size=args.selection_batch_size)
+                    else:
+                        assert args.BootBeta == "HardProbes"
+                        # TODO: Include the label correction function here
                     raise NotImplementedError
                 else:
                     print('\t##### Doing standard training with cross-entropy loss #####')

@@ -412,6 +412,189 @@ def train_CrossEntropy(args, model, device, train_loader, optimizer, epoch, use_
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
     return (loss_per_epoch, acc_train_per_epoch)
 
+
+def train_CrossEntropy_traj(args, model, device, train_loader, optimizer, epoch, trajectory_set, selection_batch_size=None):
+    model.train()
+    loss_per_batch = []
+
+    acc_train_per_batch = []
+    correct = 0
+    total = 0
+    
+    example_idx = []
+    loss_vals = []
+    
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        
+        if selection_batch_size is not None:  # Uniform sample selection
+            assert isinstance(selection_batch_size, int)
+            data = torch.randperm(len(data))[:selection_batch_size]
+        
+        output = model(data, return_features=False)
+        output = F.log_softmax(output, dim=1)
+
+        example_loss = F.nll_loss(output, target, reduction='none')
+        loss = example_loss.mean()
+        
+        # Compute individual example losses
+        with torch.no_grad():
+            example_idx.append(ex_idx.clone().cpu())
+            loss_vals.append(example_loss.clone().cpu())
+
+        loss.backward()
+        optimizer.step()
+
+        loss_per_batch.append(loss.item())
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        total += len(data)
+        acc_train_per_batch.append(100. * correct / total)
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}, # examples: {:d}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / total,
+                optimizer.param_groups[0]['lr']), len(data))
+
+    if selection_batch_size is not None:  # Some samples are empty otherwise
+        example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+        loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+        
+        # Sort the loss list
+        sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+        for i in range(len(example_idx)):
+            assert sorted_loss_list[example_idx[i]] is None
+            sorted_loss_list[example_idx[i]] = loss_vals[i]
+        assert not any([x is None for x in sorted_loss_list])
+        
+        # Append the loss list to loss trajectory
+        if trajectory_set is None:
+            trajectory_set = dict(train=[sorted_loss_list])
+        else:
+            assert "train" in trajectory_set
+            trajectory_set["train"].append(sorted_loss_list)
+
+        return trajectory_set
+
+
+def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_loader, optimizer, epoch,
+                                                     reg_term, num_classes, probes, trajectory_set, use_probs):
+    model.train()
+    loss_per_batch = []
+
+    acc_train_per_batch = []
+    correct = 0
+    
+    example_idx = []
+    loss_vals = []
+    
+    typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
+    noisy_trajectories = np.array(trajectory_set["noisy"]).transpose(1, 0)
+    train_trajectories = np.array(trajectory_set["train"]).transpose(1, 0)
+    print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
+    print(f"Train trajectories shape: {train_trajectories.shape}")
+    
+    probe_trajectories = np.concatenate([typical_trajectories, noisy_trajectories], axis=0)
+    targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(noisy_trajectories))])
+    print(f"Combined probe trajectories: {probe_trajectories.shape} / Targets: {targets.shape}")
+    
+    n_neighbors = 20
+    clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+    clf.fit(probe_trajectories, targets)
+
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+
+        output = model(data, return_features=False)
+        output = F.log_softmax(output, dim=1)
+
+        example_loss = F.nll_loss(output, target, reduction='none')
+        loss = example_loss.mean()
+        
+        # Compute individual example losses
+        with torch.no_grad():
+            example_idx.append(ex_idx.clone().cpu())
+            loss_vals.append(example_loss.clone().cpu())
+
+        # B = nearest_neighbor_classifier(typical_trajectories, noisy_trajectories, trajectory_set, ex_idx)
+        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+        if use_probs:
+            B = clf.predict_proba(ex_trajs)  # 1 means noisy
+            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+            B = B[:, 1]  # Only take the prob for being noisy
+        else:
+            B = clf.predict(ex_trajs)  # 1 means noisy
+        B = torch.from_numpy(np.array(B)).to(device)
+        B[B <= 1e-4] = 1e-4
+        B[B >= 1 - 1e-4] = 1 - 1e-4
+
+        output = F.log_softmax(output, dim=1)
+
+        pred = torch.max(output, dim=1)[1]
+        
+        loss_target_vec = (1 - B) * F.nll_loss(output, target, reduction='none')
+        loss_target = torch.sum(loss_target_vec) / len(loss_target_vec)
+
+        loss_pred_vec = B * F.nll_loss(output, pred, reduction='none')
+        loss_pred = torch.sum(loss_pred_vec) / len(loss_pred_vec)
+
+        loss = loss_target + loss_pred
+
+        # loss_reg = reg_loss_class(tab_mean_class, num_classes)
+        # loss = loss + reg_term*loss_reg
+
+        loss.backward()
+
+        optimizer.step()
+        ################## monitor losses  ####################################
+        loss_per_batch.append(loss.item())
+        ########################################################################
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                optimizer.param_groups[0]['lr']))
+
+    example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+    loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+    
+    # Sort the loss list
+    sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+    for i in range(len(example_idx)):
+        assert sorted_loss_list[example_idx[i]] is None
+        sorted_loss_list[example_idx[i]] = loss_vals[i]
+    assert not any([x is None for x in sorted_loss_list])
+    
+    # Append the loss list to loss trajectory
+    if trajectory_set is None:
+        trajectory_set = dict(train=[sorted_loss_list])
+    else:
+        assert "train" in trajectory_set
+        trajectory_set["train"].append(sorted_loss_list)
+
+    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+    trajectory_set["typical"].append(typical_stats["loss_vals"])
+    trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
+
+
 ##############################################################################
 
 ########################### Cross-entropy loss ###############################
