@@ -589,10 +589,12 @@ def main():
                                 pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
                                 print("Data saved to output file:", traj_output_file)
                         else:
-                            print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
+                            print(f'\t##### Doing CE loss-based training with uniform online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
                             trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
                                                                      selection_batch_size=args.selection_batch_size)
                     else:
+                        print(f'\t##### Doing CE loss-based training with probe-based online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                        
                         assert args.BootBeta == "HardProbes"
                         if epoch == 1:  # Load only in the first epoch
                             print("Loading trajectory set from file:", args.loss_trajectories_path)
