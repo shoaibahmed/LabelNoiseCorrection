@@ -990,18 +990,36 @@ def train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch
 
 ##############################################################################
 
-def test_tensor(model, data, target, msg=None):
+def test_tensor(model, data, target, msg=None, batch_size=None):
     assert torch.is_tensor(data) and torch.is_tensor(target)
     criterion = nn.CrossEntropyLoss(reduction='none')
     
     model.eval()
     with torch.no_grad():
-        output = model(data)
-        loss_vals = criterion(output, target)
-        test_loss = float(loss_vals.mean())
-        pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-        correct = pred.eq(target.view_as(pred)).sum().item()
-        total = len(data)
+        if batch_size is None or batch_size == len(data):
+            output = model(data)
+            loss_vals = criterion(output, target)
+            test_loss = float(loss_vals.mean())
+            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            correct = pred.eq(target.view_as(pred)).sum().item()
+            total = len(data)
+        else:
+            num_batches = int(np.ceil(len(data) / batch_size))
+            correct, total = 0, 0
+            test_loss = 0.
+            loss_vals = []
+            
+            for i in range(num_batches):
+                output = model(data[i*batch_size:(i+1)*batch_size])
+                loss_vals.append(criterion(output, target[i*batch_size:(i+1)*batch_size]))
+                test_loss += float(loss_vals[-1].sum())
+                pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                total += len(data)
+            
+            test_loss = test_loss / total
+            loss_vals = torch.cat(loss_vals, dim=0)
+            assert total == len(data), f"{total} != {len(data)}"
     
     test_acc = 100. * correct / total
     output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total, 
