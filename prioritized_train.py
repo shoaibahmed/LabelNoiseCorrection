@@ -65,7 +65,7 @@ def main():
     parser.add_argument('--Mixup', type=str, default='None', choices=['None', 'Static', 'Dynamic', 'Flooding'],
                         help="Type of bootstrapping. Available: 'None' (deactivated)(default), \
                                 'Static' (as in the paper), 'Dynamic' (BMM to mix the smaples, will use decreasing softmax), default: None")
-    parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'HardProbes', 'Soft'],
+    parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'HardProbes', 'Probes', 'Soft'],
                         help="Type of Bootstrapping guided with the BMM. Available: \
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
@@ -249,6 +249,7 @@ def main():
     if args.dataset == "Clothing1M":
         assert args.noise_level == 0.0, f"Noise level should be set to zero for clothing1M dataset (provided noise level={args.noise_level})"
         available_indices = [i for i in range(len(train_loader.dataset))]
+        misclassified_instances = [False for _ in range(len(train_loader.dataset))]
         print("!! Not adding noise for clothing1M dataset...")
         
         # path where experiments are saved
@@ -566,32 +567,32 @@ def main():
                 if args.selection_batch_size is not None:
                     # Executes the new loss trajectory functions without mixup for prioritized training
                     if args.BootBeta == "None":
-                        if args.use_loss_trajectories:
-                            print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
-                            trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set)
-                            assert probes is not None
-                            
-                            msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
-                            typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
-                            if "corrupted" in probes and len(probes["corrupted"]) > 0 and "corrupted_labels" in probes:
-                                msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
-                                corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
-                                trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
-                            msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
-                            noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
-                            trajectory_set["typical"].append(typical_stats["loss_vals"])
-                            trajectory_set["noisy"].append(noisy_stats["loss_vals"])
-                            
-                            # Save the trajectories in the last epoch
-                            print(f"Saving the loss trajectories after epoch # {epoch}...")
-                            traj_output_file = os.path.join(exp_path, f'{args.dataset.lower()}_loss_trajectories_ep_{epoch}.pkl')
-                            with open(traj_output_file, 'wb') as fp:
-                                pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
-                                print("Data saved to output file:", traj_output_file)
-                        else:
-                            print(f'\t##### Doing CE loss-based training with uniform online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
-                            trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
-                                                                     selection_batch_size=args.selection_batch_size)
+                        print(f'\t##### Doing CE loss-based training with uniform online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                        trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
+                                                                    selection_batch_size=args.selection_batch_size)
+                    if args.BootBeta == "Probes":
+                        assert args.use_loss_trajectories
+                        print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
+                        trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set)
+                        assert probes is not None
+                        
+                        msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
+                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg)
+                        if "corrupted" in probes and len(probes["corrupted"]) > 0 and "corrupted_labels" in probes:
+                            msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
+                            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+                            trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
+                        msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
+                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg)
+                        trajectory_set["typical"].append(typical_stats["loss_vals"])
+                        trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+                        
+                        # Save the trajectories in the last epoch
+                        print(f"Saving the loss trajectories after epoch # {epoch}...")
+                        traj_output_file = os.path.join(exp_path, f'{args.dataset.lower()}_loss_trajectories_ep_{epoch}.pkl')
+                        with open(traj_output_file, 'wb') as fp:
+                            pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
+                            print("Data saved to output file:", traj_output_file)
                     else:
                         print(f'\t##### Doing CE loss-based training with probe-based online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
                         
