@@ -193,6 +193,7 @@ def main():
         ])
 
     use_val_set = False
+    use_all_val_instances_for_probe = True  # Use all the remaining validation instances for probes
     if args.dataset == 'CIFAR10':
         trainset = datasets.CIFAR10(root=args.root_dir, train=True, download=True, transform=transform_train)
         trainset_track = datasets.CIFAR10(root=args.root_dir, train=True, transform=transform_train)
@@ -248,9 +249,12 @@ def main():
     
     if args.dataset == "Clothing1M":
         assert args.noise_level == 0.0, f"Noise level should be set to zero for clothing1M dataset (provided noise level={args.noise_level})"
-        available_indices = [i for i in range(len(train_loader.dataset))]
+        if use_val_set:
+            available_indices = [i for i in range(len(valset_clean_transform))]
+        else:
+            available_indices = [i for i in range(len(train_loader.dataset))]
         misclassified_instances = [False for _ in range(len(train_loader.dataset))]
-        print("!! Not adding noise for clothing1M dataset...")
+        print("!! Not adding noise for Clothing1M dataset...")
         
         # path where experiments are saved
         exp_path = os.path.join('./', 'prioritized_training_PreResNet18_{0}'.format(args.experiment_name))
@@ -372,6 +376,9 @@ def main():
             
             if args.dataset == "Clothing1M":
                 if use_val_set:
+                    if use_all_val_instances_for_probe:
+                        selected_indices = np.random.choice(available_indices, size=len(available_indices) // 2, replace=False)
+                        print("Selecting half of validation instances as typical probe for Clothing1M dataset...")
                     images = [valset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
                 else:
                     images = [trainset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
@@ -381,7 +388,7 @@ def main():
                 transforms_clean = transforms.ToTensor()
                 images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
                 probes["noisy"] = torch.stack([transforms_clean(x) for x in images], dim=0)
-            print("Selected image shape:", probes["noisy"].shape)
+            print("Selected noisy image shape:", probes["noisy"].shape)
             
             # Update available indices
             available_indices = [i for i in available_indices if i not in selected_indices]
@@ -397,7 +404,8 @@ def main():
         random_gen_labels = probe_list
         if args.treat_three_sets or args.use_gmm_probe_identification:
             assert args.use_mislabeled_examples, "Three sets only supports mislabeled probes for mislabeled example detection"
-            assert args.BootBeta == "HardProbes", "Only HardProbes is supported for three-set treatment"
+            if args.treat_three_sets:
+                assert args.BootBeta == "HardProbes", "Only HardProbes is supported for three-set treatment"
             
             # Include another probe for the detection of the third set
             assert available_indices is not None
@@ -420,6 +428,9 @@ def main():
             
             if args.dataset == "Clothing1M":
                 if use_val_set:
+                    if use_all_val_instances_for_probe:
+                        selected_indices = available_indices
+                        print("Selecting all remaining validation instances as typical probe for Clothing1M dataset...")
                     images = [valset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
                 else:
                     images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
@@ -430,7 +441,7 @@ def main():
                 images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
                 probes["typical"] = torch.stack([transforms_clean(x) for x in images], dim=0).to(device)
                 probes[f"typical_labels"] = torch.tensor([train_loader.sampler.data_source.targets[i] for i in selected_indices], dtype=torch.int64).to(device)
-            print("Selected image shape:", probes["typical"].shape)
+            print("Selected typical image shape:", probes["typical"].shape)
             
             indices_to_remove += [i for i in selected_indices]
         
@@ -452,7 +463,10 @@ def main():
             train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
             print(f"Dataset after deletion: {len(trainset)} / Dataloader size: {len(train_loader)}")
         
-        assert all([probes[k].shape == (num_example_probes, *tensor_shape) for k in probe_list])
+        if not (use_val_set and use_all_val_instances_for_probe):  # Shape differs otherwise
+            assert all([probes[k].shape == (num_example_probes, *tensor_shape) for k in probe_list])
+        print("Probe shapes:", {k: probes[k].shape for k in probe_list})
+        
         for k in probe_list:
             probes[k] = normalizer(probes[k]).to(device)
             if k in random_gen_labels:
