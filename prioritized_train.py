@@ -122,6 +122,8 @@ def main():
                         help="Use the full loss trajectory instead of just point estimates for the loss")
     parser.add_argument('--num-example-probes', type=int, default=None, 
                         help="Number of probes to be used -- defaults to 250")
+    parser.add_argument('--loss-trajectories-path', type=str, default=None, 
+                        help="Path from where to load the loss trajectories")
     # parser.add_argument('--store-loss-trajectories', action="store_true", default=False, 
     #                     help="Store loss trajectories for identification")
     
@@ -133,6 +135,10 @@ def main():
     assert not args.use_loss_trajectories or not args.use_unmodified_train_set_for_pretraining
     assert not args.use_loss_trajectories or args.use_probes_for_pretraining or args.dataset == "Clothing1M"
     assert not args.use_loss_trajectories or args.use_gmm_probe_identification or args.dataset == "Clothing1M"
+    if args.loss_trajectories_path == "":
+        args.loss_trajectories_path = None
+    assert args.loss_trajectories_path is None or (args.dataset == "Clothing1M" and args.BootBeta == "HardProbes")
+    assert args.loss_trajectories_path is None or os.path.exists(args.loss_trajectories_path), args.loss_trajectories_path
     # assert not args.store_loss_trajectories or args.dataset == "Clothing1M"
     
     if args.seed:
@@ -490,7 +496,6 @@ def main():
     prob_model = None
     trajectory_set = {"typical": [], "corrupted": [], "noisy": [], "train": []}
     model_loaded = False
-    traj_output_file = os.path.join(exp_path, f'{args.dataset.lower()}_loss_trajectories.pkl')
 
     for epoch in range(1, args.epochs + 1):
         # train
@@ -578,11 +583,11 @@ def main():
                             trajectory_set["noisy"].append(noisy_stats["loss_vals"])
                             
                             # Save the trajectories in the last epoch
-                            if epoch == args.epoch:
-                                print("Saving the loss trajectories in the last iteration...")
-                                with open(traj_output_file, 'wb') as fp:
-                                    pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
-                                    print("Data saved to output file:", traj_output_file)
+                            print(f"Saving the loss trajectories after epoch # {epoch}...")
+                            traj_output_file = os.path.join(exp_path, f'{args.dataset.lower()}_loss_trajectories_ep_{epoch}.pkl')
+                            with open(traj_output_file, 'wb') as fp:
+                                pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
+                                print("Data saved to output file:", traj_output_file)
                         else:
                             print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
                             trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
@@ -590,7 +595,7 @@ def main():
                     else:
                         assert args.BootBeta == "HardProbes"
                         if epoch == 1:  # Load only in the first epoch
-                            print("Loading trajectory set from file:", traj_output_file)
+                            print("Loading trajectory set from file:", args.loss_trajectories_path)
                             with open(traj_output_file, 'rb') as fp:
                                 trajectory_set = pickle.load(fp)
                                 print("Trajectories loaded successfully...")
