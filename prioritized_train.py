@@ -378,7 +378,7 @@ def main():
                 if use_val_set:
                     if use_all_val_instances_for_probe:
                         selected_indices = np.random.choice(available_indices, size=len(available_indices) // 2, replace=False)
-                        print("Selecting half of validation instances as typical probe for Clothing1M dataset...")
+                        print("Selecting half of validation instances as noisy probe for Clothing1M dataset...")
                     images = [valset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
                 else:
                     images = [trainset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
@@ -470,8 +470,8 @@ def main():
         for k in probe_list:
             probes[k] = normalizer(probes[k]).to(device)
             if k in random_gen_labels:
-                print("Generating random labels for:", k)
-                probes[f"{k}_labels"] = torch.randint(0, num_classes, (num_example_probes,)).to(device)
+                probes[f"{k}_labels"] = torch.randint(0, num_classes, (len(probes[k]),)).to(device)
+                print(f"Generated random labels for {k} w/ size: {probes[f'{k}_labels'].shape}")
         
         probe_images = torch.cat([probes[k] for k in probe_list], dim=0)
         probe_labels = torch.cat([probes[f"{k}_labels"] for k in probe_list], dim=0)
@@ -590,14 +590,13 @@ def main():
                         trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set)
                         assert probes is not None
                         
-                        msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
-                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg, batch_size=args.num_example_probes)
+                        msg_end = " val probe" if use_val_set else " probe"
+                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=f"Typical{msg_end}", batch_size=args.num_example_probes)
                         if "corrupted" in probes and len(probes["corrupted"]) > 0 and "corrupted_labels" in probes:
-                            msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
-                            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", batch_size=args.num_example_probes)
+                            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg=f"Corrupted{msg_end}", batch_size=args.num_example_probes)
                             trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
                         msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
-                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg, batch_size=args.num_example_probes)
+                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=f"Noisy{msg_end}", batch_size=args.num_example_probes)
                         trajectory_set["typical"].append(typical_stats["loss_vals"])
                         trajectory_set["noisy"].append(noisy_stats["loss_vals"])
                         

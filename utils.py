@@ -992,6 +992,7 @@ def train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch
 
 def test_tensor(model, data, target, msg=None, batch_size=None):
     assert torch.is_tensor(data) and torch.is_tensor(target)
+    assert len(data) == len(target), f"{len(data)} != {len(target)}"
     criterion = nn.CrossEntropyLoss(reduction='none')
     
     model.eval()
