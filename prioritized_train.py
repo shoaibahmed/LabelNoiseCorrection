@@ -591,13 +591,13 @@ def main():
                         assert probes is not None
                         
                         msg = f"Probe during pretraining{' (train set + typical probe)' if args.use_probes_for_pretraining else ''}"
-                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg, batch_size=args.num_probe_examples)
+                        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg=msg, batch_size=args.num_example_probes)
                         if "corrupted" in probes and len(probes["corrupted"]) > 0 and "corrupted_labels" in probes:
                             msg = f"Probe during pretraining{' (train set + corrupted probe)' if args.use_probes_for_pretraining else ''}"
-                            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", batch_size=args.num_probe_examples)
+                            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", batch_size=args.num_example_probes)
                             trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
                         msg = f"Probe during pretraining{' (train set + noisy probe)' if args.use_probes_for_pretraining else ''}"
-                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg, batch_size=args.num_probe_examples)
+                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg=msg, batch_size=args.num_example_probes)
                         trajectory_set["typical"].append(typical_stats["loss_vals"])
                         trajectory_set["noisy"].append(noisy_stats["loss_vals"])
                         

@@ -1004,18 +1004,21 @@ def test_tensor(model, data, target, msg=None, batch_size=None):
             correct = pred.eq(target.view_as(pred)).sum().item()
             total = len(data)
         else:
+            assert batch_size is not None
             num_batches = int(np.ceil(len(data) / batch_size))
             correct, total = 0, 0
             test_loss = 0.
             loss_vals = []
             
             for i in range(num_batches):
-                output = model(data[i*batch_size:(i+1)*batch_size])
-                loss_vals.append(criterion(output, target[i*batch_size:(i+1)*batch_size]))
+                current_data = data[i*batch_size:(i+1)*batch_size]
+                current_target = target[i*batch_size:(i+1)*batch_size]
+                output = model(current_data)
+                loss_vals.append(criterion(output, current_target))
                 test_loss += float(loss_vals[-1].sum())
                 pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-                correct += pred.eq(target.view_as(pred)).sum().item()
-                total += len(data)
+                correct += pred.eq(current_target.view_as(pred)).sum().item()
+                total += len(current_data)
             
             test_loss = test_loss / total
             loss_vals = torch.cat(loss_vals, dim=0)
