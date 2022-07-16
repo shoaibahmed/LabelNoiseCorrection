@@ -493,7 +493,7 @@ def main():
             comb_trainset = torch.utils.data.ConcatDataset([trainset, probe_dataset_standard])
             
             # probe_identity = ["noisy_probe" for _ in range(len(probe_images))]
-            probe_identity = [f"{k}_probe" for k in probe_list for _ in range(num_example_probes)]
+            probe_identity = [f"{k}_probe" for k in probe_list for _ in range(len(probes[k]))]
             assert len(probe_identity) == len(probe_images)
             dataset_probe_identity = ["train_noisy" if misclassified_instances[i] else "train_clean" for i in range(len(trainset))] + probe_identity
         
