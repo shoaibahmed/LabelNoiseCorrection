@@ -485,7 +485,7 @@ def main():
         probe_images = torch.cat([probes[k] for k in probe_list], dim=0)
         probe_labels = torch.cat([probes[f"{k}_labels"] for k in probe_list], dim=0)
         probe_dataset_standard = CustomTensorDataset(probe_images.to("cpu"), [int(x) for x in probe_labels.to("cpu").numpy().tolist()])
-        if use_val_set:
+        if use_val_set and not args.use_probes_for_pretraining:
             print("! WARNING: Not including probe examples for training taken from the validation set...")
             comb_trainset = trainset
             dataset_probe_identity = ["train_noisy" if misclassified_instances[i] else "train_clean" for i in range(len(trainset))]
@@ -593,7 +593,7 @@ def main():
                         print(f'\t##### Doing CE loss-based training with uniform online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
                         trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set, 
                                                                     selection_batch_size=args.selection_batch_size)
-                    if args.BootBeta == "Probes":
+                    elif args.BootBeta == "Probes":
                         assert args.use_loss_trajectories
                         print('\t##### Doing CE loss-based training with loss trajectories (store for identification) #####')
                         trajectory_set = train_CrossEntropy_traj(args, model, device, idx_train_loader, optimizer, epoch, trajectory_set)
