@@ -612,7 +612,7 @@ def main():
                         assert args.BootBeta == "HardProbes"
                         if epoch == 1:  # Load only in the first epoch
                             print("Loading trajectory set from file:", args.loss_trajectories_path)
-                            with open(traj_output_file, 'rb') as fp:
+                            with open(args.loss_trajectories_path, 'rb') as fp:
                                 trajectory_set = pickle.load(fp)
                                 print("Trajectories loaded successfully...")
                                 typical_traj = np.array(trajectory_set["typical"]).transpose(1, 0)

@@ -514,11 +514,15 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
         optimizer.zero_grad()
         
         ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-        if selection_batch_size is not None:  # Uniform sample selection
+        if selection_batch_size is not None:  # Typical score-based sample selection
             assert use_probs
             assert isinstance(selection_batch_size, int)
-            B = clf.predict_proba(ex_trajs)  # 1 means noisy
+            B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
             assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+            B = torch.from_numpy(np.array(B)).to(device)
+            
+            class_scores = B.mean(dim=0)
+            print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f}")
             B = B[:, 0]  # Only take the prob for being noisy
             
             # Select examples with the highest probablity of being typical
@@ -526,7 +530,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
             data, target = data[selected_indices], target[selected_indices]
         else:
             if use_probs:
-                B = clf.predict_proba(ex_trajs)  # 1 means noisy
+                B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
                 assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
                 B = B[:, 1]  # Only take the prob for being noisy
             else:
@@ -557,7 +561,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
             # loss_reg = reg_loss_class(tab_mean_class, num_classes)
             # loss = loss + reg_term*loss_reg
         else:
-            loss_target = F.nll_loss(output, target)
+            loss = F.nll_loss(output, target)
 
         loss.backward()
 
