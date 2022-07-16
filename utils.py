@@ -491,6 +491,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
 
     acc_train_per_batch = []
     correct = 0
+    total = 0
     
     example_idx = []
     loss_vals = []
@@ -573,13 +574,14 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
         # save accuracy:
         pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
         correct += pred.eq(target.view_as(pred)).sum().item()
-        acc_train_per_batch.append(100. * correct / ((batch_idx+1)*args.batch_size))
+        total += len(data)
+        acc_train_per_batch.append(100. * correct / total)
 
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}, # examples: {:d}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                        100. * batch_idx / len(train_loader), loss.item(),
-                       100. * correct / ((batch_idx + 1) * args.batch_size),
+                       100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
 
     if selection_batch_size is None:
