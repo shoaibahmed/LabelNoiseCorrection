@@ -124,6 +124,8 @@ def main():
                         help="Number of probes to be used -- defaults to 250")
     parser.add_argument('--loss-trajectories-path', type=str, default=None, 
                         help="Path from where to load the loss trajectories")
+    parser.add_argument('--use-im-pretrained-model', default=False, action='store_true', 
+                        help="Use ImageNet pretrained model (only applicable for Clothing1M dataset)")
     # parser.add_argument('--store-loss-trajectories', action="store_true", default=False, 
     #                     help="Store loss trajectories for identification")
     
@@ -139,7 +141,7 @@ def main():
         args.loss_trajectories_path = None
     assert args.loss_trajectories_path is None or (args.dataset == "Clothing1M" and args.BootBeta == "HardProbes")
     assert args.loss_trajectories_path is None or os.path.exists(args.loss_trajectories_path), args.loss_trajectories_path
-    # assert not args.store_loss_trajectories or args.dataset == "Clothing1M"
+    assert not args.use_im_pretrained_model or args.dataset == "Clothing1M"
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -221,7 +223,14 @@ def main():
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
     if args.dataset == "Clothing1M":
         print("Using ResNet-50...")
-        model = models.resnet50(num_classes=num_classes).to(device)
+        if args.use_im_pretrained_model:  # RHO-Loss paper uses pretrained model
+            print("Using pretrained ResNet-50...")
+            model = models.resnet50(pretrained=True)
+            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+            model = model.to(device)
+        else:
+            print("Using randomly initialized ResNet-50...")
+            model = models.resnet50(num_classes=num_classes).to(device)
         model = ModelWithFeatures(model)  # Returns model features as well
     else:
         model = PreResNet.ResNet18(num_classes=num_classes, ssl_training=ssl_training).to(device)
