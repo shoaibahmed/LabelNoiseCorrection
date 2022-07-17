@@ -65,7 +65,7 @@ def main():
     parser.add_argument('--Mixup', type=str, default='None', choices=['None', 'Static', 'Dynamic', 'Flooding'],
                         help="Type of bootstrapping. Available: 'None' (deactivated)(default), \
                                 'Static' (as in the paper), 'Dynamic' (BMM to mix the smaples, will use decreasing softmax), default: None")
-    parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'HardProbes', 'Probes', 'Soft'],
+    parser.add_argument('--BootBeta', type=str, default='Hard', choices=['None', 'Hard', 'HardProbes', 'Probes', 'Soft', 'RHOProbes'],
                         help="Type of Bootstrapping guided with the BMM. Available: \
                         'None' (deactivated)(default), 'Hard' (Hard bootstrapping), 'Soft' (Soft bootstrapping), default: Hard")
     parser.add_argument('--reg-term', type=float, default=0., 
@@ -139,7 +139,7 @@ def main():
     assert not args.use_loss_trajectories or args.use_gmm_probe_identification or args.dataset == "Clothing1M"
     if args.loss_trajectories_path == "":
         args.loss_trajectories_path = None
-    assert args.loss_trajectories_path is None or (args.dataset == "Clothing1M" and args.BootBeta == "HardProbes")
+    assert args.loss_trajectories_path is None or (args.dataset == "Clothing1M" and "Probes" in args.BootBeta)
     assert args.loss_trajectories_path is None or os.path.exists(args.loss_trajectories_path), args.loss_trajectories_path
     assert not args.use_im_pretrained_model or args.dataset == "Clothing1M"
     
@@ -616,9 +616,7 @@ def main():
                             pickle.dump(trajectory_set, fp, protocol=pickle.HIGHEST_PROTOCOL)
                             print("Data saved to output file:", traj_output_file)
                     else:
-                        print(f'\t##### Doing CE loss-based training with probe-based online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
-                        
-                        assert args.BootBeta == "HardProbes"
+                        assert args.BootBeta in ["HardProbes", "RHOProbes"]
                         if epoch == 1:  # Load only in the first epoch
                             print("Loading trajectory set from file:", args.loss_trajectories_path)
                             with open(args.loss_trajectories_path, 'rb') as fp:
@@ -629,10 +627,17 @@ def main():
                                 train_traj = np.array(trajectory_set["train"]).transpose(1, 0)
                                 print(f"Trajectories shape / Train: {train_traj.shape} / Typical: {typical_traj.shape} / Noisy: {noisy_traj.shape}")
                         
-                        # Execute the label correction scheme
-                        train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term, 
-                                                                         num_classes, probes, trajectory_set, not args.use_binary_prediction,
-                                                                         selection_batch_size=args.selection_batch_size)
+                        if args.BootBeta == "HardProbes":
+                            print(f'\t##### Doing CE loss-based training with probe-based online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                            train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term, 
+                                                                            num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                            selection_batch_size=args.selection_batch_size)
+                        else:
+                            assert args.BootBeta == "RHOProbes"
+                            print(f'\t##### Doing CE loss-based training with score-based (typicality + conf) online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                            train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
+                                                                                 num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                                 selection_batch_size=args.selection_batch_size)
                 
                 else:
                     print('\t##### Doing standard training with cross-entropy loss #####')
