@@ -126,8 +126,8 @@ def main():
                         help="Path from where to load the loss trajectories")
     parser.add_argument('--use-im-pretrained-model', default=False, action='store_true', 
                         help="Use ImageNet pretrained model (only applicable for Clothing1M dataset)")
-    # parser.add_argument('--store-loss-trajectories', action="store_true", default=False, 
-    #                     help="Store loss trajectories for identification")
+    parser.add_argument('--subsample-val-probes', type=int, default=None, 
+                        help="Number of val probes to be used -- defaults to using all of them (only applicable for clothing1m dataset)")
     
     args = parser.parse_args()
     
@@ -142,6 +142,7 @@ def main():
     assert args.loss_trajectories_path is None or (args.dataset == "Clothing1M" and "Probes" in args.BootBeta)
     assert args.loss_trajectories_path is None or os.path.exists(args.loss_trajectories_path), args.loss_trajectories_path
     assert not args.use_im_pretrained_model or args.dataset == "Clothing1M"
+    assert args.subsample_val_probes is None or args.dataset == "Clothing1M"
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -626,6 +627,19 @@ def main():
                                 noisy_traj = np.array(trajectory_set["noisy"]).transpose(1, 0)
                                 train_traj = np.array(trajectory_set["train"]).transpose(1, 0)
                                 print(f"Trajectories shape / Train: {train_traj.shape} / Typical: {typical_traj.shape} / Noisy: {noisy_traj.shape}")
+
+                            if args.subsample_val_probes is not None:
+                                assert isinstance(args.subsample_val_probes, int)
+                                print(f"Subsampling {args.subsample_val_probes} validation probes...")
+                                assert args.subsample_val_probes <= len(typical_traj), len(typical_traj)
+                                assert args.subsample_val_probes <= len(noisy_traj), len(noisy_traj)
+                                typical_idx = np.random.choice(np.arange(len(typical_traj)), size=args.subsample_val_probes, replace=False)
+                                trajectory_set["typical"] = np.array([typical_traj[i] for i in typical_idx]).transpose(1, 0).tolist()
+                                noisy_idx = np.random.choice(np.arange(len(noisy_traj)), size=args.subsample_val_probes, replace=False)
+                                trajectory_set["noisy"] = np.array([noisy_traj[i] for i in noisy_idx]).transpose(1, 0).tolist()
+                                # trajectory_set["typical"] = np.random.choice(typical_traj, size=args.subsample_val_probes, replace=False).transpose(1, 0).tolist()
+                                # trajectory_set["noisy"] = np.random.choice(noisy_traj, size=args.subsample_val_probes, replace=False).transpose(1, 0).tolist()
+                                print(f"Subsampled trajectories shape / Train: {np.array(trajectory_set['train']).shape} / Typical: {np.array(trajectory_set['typical']).shape} / Noisy: {np.array(trajectory_set['noisy']).shape}")
                         
                         if args.BootBeta == "HardProbes":
                             print(f'\t##### Doing CE loss-based training with probe-based online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
