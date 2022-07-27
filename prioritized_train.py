@@ -464,7 +464,9 @@ def main():
                     noise_aug = AddGaussianNoise(std=0.25)
                     probes["corrupted"] = torch.stack([noise_aug(x[0]) for x in images], dim=0)
                     probes[f"corrupted_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
-                    random_gen_labels = ["noisy"]  # Corrupted is real set
+                    
+                    probe_list = ["noisy", "corrupted", "typical"]
+                    random_gen_labels = ["noisy"]  # Corrupted should have real labels
             
             else:
                 assert not use_val_set
