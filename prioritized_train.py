@@ -128,6 +128,8 @@ def main():
                         help="Use ImageNet pretrained model (only applicable for Clothing1M dataset)")
     parser.add_argument('--subsample-val-probes', type=int, default=None, 
                         help="Number of val probes to be used -- defaults to using all of them (only applicable for clothing1m dataset)")
+    parser.add_argument('--use-three-set-prioritized-training', type=int, default=None, 
+                        help="Three set prioritizied training framework")
     
     args = parser.parse_args()
     
@@ -143,6 +145,7 @@ def main():
     assert args.loss_trajectories_path is None or os.path.exists(args.loss_trajectories_path), args.loss_trajectories_path
     assert not args.use_im_pretrained_model or args.dataset == "Clothing1M"
     assert args.subsample_val_probes is None or args.dataset == "Clothing1M"
+    assert not args.use_three_set_prioritized_training or (args.num_example_probes is not None and args.dataset == "Clothing1M")
     
     if args.seed:
         torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
@@ -196,7 +199,7 @@ def main():
         ])
 
     use_val_set = False
-    use_all_val_instances_for_probe = True  # Use all the remaining validation instances for probes
+    use_all_val_instances_for_probe = not args.use_three_set_prioritized_training  # Use all the remaining validation instances for probes
     if args.dataset == 'CIFAR10':
         trainset = datasets.CIFAR10(root=args.root_dir, train=True, download=True, transform=transform_train)
         trainset_track = datasets.CIFAR10(root=args.root_dir, train=True, transform=transform_train)
@@ -446,6 +449,23 @@ def main():
                     images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
                 probes["typical"] = torch.stack([x[0] for x in images], dim=0)
                 probes[f"typical_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
+                
+                # Add the remaining instances to the corrupted probe
+                if args.use_three_set_prioritized_training:
+                    num_idx_before = len(available_indices)
+                    available_indices = [x for x in available_indices if x not in selected_indices]
+                    print(f"Indices before: {num_idx_before}  /  Indices after: {len(available_indices)}")
+                    selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
+                    if use_val_set:
+                        assert not use_all_val_instances_for_probe
+                        images = [valset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
+                    else:
+                        images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
+                    noise_aug = AddGaussianNoise(std=0.25)
+                    probes["corrupted"] = torch.stack([noise_aug(x[0]) for x in images], dim=0)
+                    probes[f"corrupted_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
+                    random_gen_labels = ["noisy"]  # Corrupted is real set
+            
             else:
                 assert not use_val_set
                 images = [train_loader.sampler.data_source.data[i] for i in selected_indices]
@@ -648,10 +668,16 @@ def main():
                                                                             selection_batch_size=args.selection_batch_size)
                         else:
                             assert args.BootBeta == "RHOProbes"
-                            print(f'\t##### Doing CE loss-based training with score-based (typicality + conf) online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
-                            train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
-                                                                                 num_classes, probes, trajectory_set, not args.use_binary_prediction,
-                                                                                 selection_batch_size=args.selection_batch_size)
+                            if args.use_three_set_prioritized_training:
+                                print(f'\t##### Doing CE loss-based training with three-set online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                                train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
+                                                                                               num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                                               selection_batch_size=args.selection_batch_size)
+                            else:
+                                print(f'\t##### Doing CE loss-based training with score-based (typicality + conf) online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                                train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
+                                                                                    num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                                    selection_batch_size=args.selection_batch_size)
                 
                 else:
                     print('\t##### Doing standard training with cross-entropy loss #####')
