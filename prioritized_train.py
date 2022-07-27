@@ -680,9 +680,9 @@ def main():
                                     trajectory_set["train"].append([0. for _ in range(len(idx_dataset))])
                                 
                                 print(f'\t##### Doing CE loss-based training with three-set online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
-                                train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
-                                                                                               num_classes, probes, trajectory_set, not args.use_binary_prediction,
-                                                                                               selection_batch_size=args.selection_batch_size)
+                                _, _, trajectory_set = train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
+                                                                                                                      num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                                                                      selection_batch_size=args.selection_batch_size)
                             else:
                                 print(f'\t##### Doing CE loss-based training with score-based (typicality + conf) online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
                                 train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,

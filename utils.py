@@ -794,8 +794,6 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         
-        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-        
         # Recompute the probe stats
         typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
         corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
@@ -808,9 +806,21 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
         clf.fit(aug_probe_trajectories, targets)
         
+        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+        
+        # Augment the loss trajectories with the current example loss
+        with torch.no_grad():
+            output = model(data, return_features=False)
+            example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()
+            example_idx.append(ex_idx.clone().cpu())
+            loss_vals.append(example_loss)
+
+            aug_ex_trajs = np.concatenate([ex_trajs, example_loss[:, None]], axis=1)  # Concatenate
+            print(f"Shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
+        
         assert use_probs
         assert isinstance(selection_batch_size, int)
-        B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+        B = clf.predict_proba(aug_ex_trajs)  # 0 means typical and 1 means noisy
         assert len(B.shape) == 2 and B.shape[1] == 3, B.shape
         B = torch.from_numpy(np.array(B)).to(device)
         
@@ -827,12 +837,6 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         pred = torch.max(output, dim=1)[1]
 
         if selection_batch_size is None:
-            # Compute individual example losses
-            with torch.no_grad():
-                example_loss = F.nll_loss(output, target, reduction='none')
-                example_idx.append(ex_idx.clone().cpu())
-                loss_vals.append(example_loss.clone().cpu())
-
             loss_target_vec = (1 - B) * F.nll_loss(output, target, reduction='none')
             loss_target = torch.sum(loss_target_vec) / len(loss_target_vec)
 
@@ -866,8 +870,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
                        100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
 
-    # TODO: Recompute all the scores here
-    raise NotImplementedError
+    # Concatenate the computed scores to the final list
     example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
     loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
     
@@ -886,8 +889,10 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         trajectory_set["train"].append(sorted_loss_list)
 
     typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+    corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
     noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
     trajectory_set["typical"].append(typical_stats["loss_vals"])
+    trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
     trajectory_set["noisy"].append(noisy_stats["loss_vals"])
 
     loss_per_epoch = [np.average(loss_per_batch)]
