@@ -128,7 +128,7 @@ def main():
                         help="Use ImageNet pretrained model (only applicable for Clothing1M dataset)")
     parser.add_argument('--subsample-val-probes', type=int, default=None, 
                         help="Number of val probes to be used -- defaults to using all of them (only applicable for clothing1m dataset)")
-    parser.add_argument('--use-three-set-prioritized-training', type=int, default=None, 
+    parser.add_argument('--use-three-set-prioritized-training', default=False, action='store_true', 
                         help="Three set prioritizied training framework")
     
     args = parser.parse_args()
@@ -433,7 +433,8 @@ def main():
             
             probe_list = ["noisy", "corrupted", "typical"] if args.treat_three_sets else ["typical", "noisy"]
             random_gen_labels = ["noisy", "corrupted"]
-            print("Corrupted probe included in the dataset for three-set treatment...")
+            if args.treat_three_sets:
+                print("Corrupted probe included in the dataset for three-set treatment...")
             
             print("Using examples from the dataset with original labels as typical probe...")
             selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
@@ -454,7 +455,7 @@ def main():
                 if args.use_three_set_prioritized_training:
                     num_idx_before = len(available_indices)
                     available_indices = [x for x in available_indices if x not in selected_indices]
-                    print(f"Indices before: {num_idx_before}  /  Indices after: {len(available_indices)}")
+                    print(f"Indices before: {num_idx_before} / Indices after: {len(available_indices)}")
                     selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
                     if use_val_set:
                         assert not use_all_val_instances_for_probe
@@ -640,7 +641,7 @@ def main():
                             print("Data saved to output file:", traj_output_file)
                     else:
                         assert args.BootBeta in ["HardProbes", "RHOProbes"]
-                        if epoch == 1:  # Load only in the first epoch
+                        if not args.use_three_set_prioritized_training and epoch == 1:  # Load only in the first epoch
                             print("Loading trajectory set from file:", args.loss_trajectories_path)
                             with open(args.loss_trajectories_path, 'rb') as fp:
                                 trajectory_set = pickle.load(fp)
@@ -671,6 +672,13 @@ def main():
                         else:
                             assert args.BootBeta == "RHOProbes"
                             if args.use_three_set_prioritized_training:
+                                if len(trajectory_set["typical"]) == 0:
+                                    print("Adding fake loss values of zero...")
+                                    trajectory_set["typical"].append([0. for _ in range(len(probes["typical"]))])
+                                    trajectory_set["corrupted"].append([0. for _ in range(len(probes["corrupted"]))])
+                                    trajectory_set["noisy"].append([0. for _ in range(len(probes["noisy"]))])
+                                    trajectory_set["train"].append([0. for _ in range(len(idx_dataset))])
+                                
                                 print(f'\t##### Doing CE loss-based training with three-set online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
                                 train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
                                                                                                num_classes, probes, trajectory_set, not args.use_binary_prediction,

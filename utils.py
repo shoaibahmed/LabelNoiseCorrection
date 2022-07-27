@@ -766,6 +766,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     Should do online batch selection, as well as online batch updation with loss values.
     Only train on examples considered to the corrupted
     """
+    assert selection_batch_size is not None
     model.train()
     loss_per_batch = []
 
@@ -777,57 +778,49 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     loss_vals = []
     
     typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
+    corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
     noisy_trajectories = np.array(trajectory_set["noisy"]).transpose(1, 0)
     train_trajectories = np.array(trajectory_set["train"]).transpose(1, 0)
     print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
     print(f"Train trajectories shape: {train_trajectories.shape}")
-    
-    probe_trajectories = np.concatenate([typical_trajectories, noisy_trajectories], axis=0)
-    targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(noisy_trajectories))])
+
+    probe_trajectories = np.concatenate([typical_trajectories, corrupted_trajectories, noisy_trajectories], axis=0)
+    targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(corrupted_trajectories))] + [2 for _ in range(len(noisy_trajectories))])
     print(f"Combined probe trajectories: {probe_trajectories.shape} / Targets: {targets.shape}")
     
     n_neighbors = 20
-    clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
-    clf.fit(probe_trajectories, targets)
-
+    
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         
         ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-        if selection_batch_size is not None:  # Typical score-based sample selection
-            assert use_probs
-            assert isinstance(selection_batch_size, int)
-            B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
-            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-            B = torch.from_numpy(np.array(B)).to(device)
-            
-            class_scores = B.mean(dim=0)
-            B = B[:, 0]  # Only take the prob for being typical
-            
-            # Identify examples which are already learned (compute the prob)
-            with torch.no_grad():
-                output = model(data, return_features=False)
-                output = F.softmax(output, dim=1)
-                correct_class_probs = output[torch.arange(len(output)), target]
-            typicality_score = B
-            not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
-            selection_score = (typicality_score + not_learned_score) / 2.
-            print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
-            
-            # Select examples with the highest probablity of being typical and lowest correct class prob
-            selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
-            data, target = data[selected_indices], target[selected_indices]
-        else:
-            if use_probs:
-                B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
-                assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-                B = B[:, 1]  # Only take the prob for being noisy
-            else:
-                B = clf.predict(ex_trajs)  # 1 means noisy
-            B = torch.from_numpy(np.array(B)).to(device)
-            B[B <= 1e-4] = 1e-4
-            B[B >= 1 - 1e-4] = 1 - 1e-4
+        
+        # Recompute the probe stats
+        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+        
+        # Concatenate with the probe trajectories
+        all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+        aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+        print(f"Shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {all_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
+        clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+        clf.fit(aug_probe_trajectories, targets)
+        
+        assert use_probs
+        assert isinstance(selection_batch_size, int)
+        B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+        assert len(B.shape) == 2 and B.shape[1] == 3, B.shape
+        B = torch.from_numpy(np.array(B)).to(device)
+        
+        class_scores = B.mean(dim=0)
+        selection_score = B[:, 1]  # Only take the prob for being corrupted
+        print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f} / Selection score: {selection_score.mean():.4f}")
+        
+        # Select examples with the highest probablity of being typical and lowest correct class prob
+        selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+        data, target = data[selected_indices], target[selected_indices]
 
         output = model(data, return_features=False)
         output = F.log_softmax(output, dim=1)
@@ -872,8 +865,6 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
                        100. * batch_idx / len(train_loader), loss.item(),
                        100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
-        
-        # TODO: Recompute the probe scores here
 
     # TODO: Recompute all the scores here
     raise NotImplementedError
