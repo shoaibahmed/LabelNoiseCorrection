@@ -392,10 +392,15 @@ def main():
                     if use_all_val_instances_for_probe:
                         selected_indices = np.random.choice(available_indices, size=len(available_indices) // 2, replace=False)
                         print("Selecting half of validation instances as noisy probe for Clothing1M dataset...")
-                    images = [valset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
+                    # images = [valset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
+                    examples = [valset_clean_transform[i] for i in selected_indices]
                 else:
-                    images = [trainset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
+                    # images = [trainset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
+                    examples = [trainset_clean_transform[i] for i in selected_indices]
+                images = [x[0] for x in examples]
+                orig_labels = [x[1] for x in examples]
                 probes["noisy"] = torch.stack(images, dim=0)
+                probes["noisy_orig_labels"] = torch.tensor(orig_labels, dtype=torch.int64).to(device)
             else:
                 assert not use_val_set
                 transforms_clean = transforms.ToTensor()
@@ -504,7 +509,21 @@ def main():
             probes[k] = normalizer(probes[k]).to(device)
             if k in random_gen_labels:
                 probes[f"{k}_labels"] = torch.randint(0, num_classes, (len(probes[k]),)).to(device)
-                print(f"Generated random labels for {k} w/ size: {probes[f'{k}_labels'].shape}")
+                
+                if f"{k}_orig_labels" in probes:  # Validate that these labels are different from the original labels
+                    print(f"Validating against original labels of {k} probe category...")
+                    num_labels_adjusted = 0
+                    for i in range(len(probes[f"{k}_labels"])):  # Ensure that the correct labels are not assigned by mistake
+                        if probes[f"{k}_labels"][i] == probes[f"{k}_orig_labels"][i]:
+                            # Chance the assigned label
+                            choice_list = list(range(num_classes))
+                            choice_list.remove(int(probes[f"{k}_orig_labels"][i]))
+                            assert len(choice_list) == num_classes - 1
+                            new_label = np.random.choice(choice_list)
+                            probes[f"{k}_labels"][i] = new_label
+                            num_labels_adjusted += 1
+                        assert probes[f"{k}_labels"][i] != probes[f"{k}_orig_labels"][i]
+                    print("Number of random output labels adjusted:", num_labels_adjusted)
         
         probe_images = torch.cat([probes[k] for k in probe_list], dim=0)
         probe_labels = torch.cat([probes[f"{k}_labels"] for k in probe_list], dim=0)
