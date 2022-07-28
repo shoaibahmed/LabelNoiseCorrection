@@ -776,6 +776,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     
     example_idx = []
     loss_vals = []
+    recompute_iter = 1
     
     typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
     corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
@@ -795,28 +796,30 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         optimizer.zero_grad()
         
         # Recompute the probe stats
-        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
-        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
-        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
-        
-        # Concatenate with the probe trajectories
-        all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
-        aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
-        print(f"Shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {all_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
-        clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
-        clf.fit(aug_probe_trajectories, targets)
+        if batch_idx % recompute_iter == 0:
+            typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+            noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+            
+            # Concatenate with the probe trajectories
+            all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+            aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+            print(f"Probe shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {all_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
+            clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+            clf.fit(aug_probe_trajectories, targets)
         
         ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
         
         # Augment the loss trajectories with the current example loss
         with torch.no_grad():
             output = model(data, return_features=False)
+            output = F.log_softmax(output, dim=1)
             example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()
             example_idx.append(ex_idx.clone().cpu())
             loss_vals.append(example_loss)
 
             aug_ex_trajs = np.concatenate([ex_trajs, example_loss[:, None]], axis=1)  # Concatenate
-            print(f"Shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
+            print(f"Example shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
         
         assert use_probs
         assert isinstance(selection_batch_size, int)

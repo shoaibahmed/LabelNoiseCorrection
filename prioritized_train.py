@@ -392,15 +392,11 @@ def main():
                     if use_all_val_instances_for_probe:
                         selected_indices = np.random.choice(available_indices, size=len(available_indices) // 2, replace=False)
                         print("Selecting half of validation instances as noisy probe for Clothing1M dataset...")
-                    # images = [valset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
-                    examples = [valset_clean_transform[i] for i in selected_indices]
+                    images = [valset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
                 else:
-                    # images = [trainset_clean_transform[i][0] for i in selected_indices]  # Will include clean augmentations
-                    examples = [trainset_clean_transform[i] for i in selected_indices]
-                images = [x[0] for x in examples]
-                orig_labels = [x[1] for x in examples]
-                probes["noisy"] = torch.stack(images, dim=0)
-                probes["noisy_orig_labels"] = torch.tensor(orig_labels, dtype=torch.int64).to(device)
+                    images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
+                probes["noisy"] = torch.stack([x[0] for x in images], dim=0)
+                probes["noisy_orig_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
             else:
                 assert not use_val_set
                 transforms_clean = transforms.ToTensor()
@@ -458,6 +454,9 @@ def main():
                 
                 # Add the remaining instances to the corrupted probe
                 if args.use_three_set_prioritized_training:
+                    print("Using examples from the dataset with original labels and input noise as the corrupted probe...")
+                    indices_to_remove += [i for i in selected_indices]  # Add the typical indices
+                    
                     num_idx_before = len(available_indices)
                     available_indices = [x for x in available_indices if x not in selected_indices]
                     print(f"Indices before: {num_idx_before} / Indices after: {len(available_indices)}")
