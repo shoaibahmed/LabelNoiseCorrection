@@ -814,9 +814,10 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         with torch.no_grad():
             output = model(data, return_features=False)
             output = F.log_softmax(output, dim=1)
-            example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()
+            example_loss = F.nll_loss(output, target, reduction='none').clone().cpu()
             example_idx.append(ex_idx.clone().cpu())
             loss_vals.append(example_loss)
+            example_loss = example_loss.numpy()
 
             aug_ex_trajs = np.concatenate([ex_trajs, example_loss[:, None]], axis=1)  # Concatenate
             print(f"Example shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
@@ -831,28 +832,15 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         selection_score = B[:, 1]  # Only take the prob for being corrupted
         print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f} / Selection score: {selection_score.mean():.4f}")
         
-        # Select examples with the highest probablity of being typical and lowest correct class prob
+        # Perform selection based on the selection score (select the highest scoring examples)
         selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
         data, target = data[selected_indices], target[selected_indices]
 
         output = model(data, return_features=False)
         output = F.log_softmax(output, dim=1)
         pred = torch.max(output, dim=1)[1]
-
-        if selection_batch_size is None:
-            loss_target_vec = (1 - B) * F.nll_loss(output, target, reduction='none')
-            loss_target = torch.sum(loss_target_vec) / len(loss_target_vec)
-
-            loss_pred_vec = B * F.nll_loss(output, pred, reduction='none')
-            loss_pred = torch.sum(loss_pred_vec) / len(loss_pred_vec)
-
-            loss = loss_target + loss_pred
-
-            # loss_reg = reg_loss_class(tab_mean_class, num_classes)
-            # loss = loss + reg_term*loss_reg
-        else:
-            loss = F.nll_loss(output, target)
-
+        
+        loss = F.nll_loss(output, target)
         loss.backward()
 
         optimizer.step()
