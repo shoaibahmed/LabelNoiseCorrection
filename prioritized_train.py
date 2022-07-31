@@ -466,7 +466,7 @@ def main():
                         images = [valset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
                     else:
                         images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
-                    noise_aug = transforms.Compose([AddGaussianNoise(std=0.25), ClampRangeTransform(0., 1.)])
+                    noise_aug = transforms.Compose([AddGaussianNoise(std=0.10), ClampRangeTransform(0., 1.)])
                     probes["corrupted"] = torch.stack([noise_aug(x[0]) for x in images], dim=0)
                     probes[f"corrupted_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
                     

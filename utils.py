@@ -776,7 +776,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     
     example_idx = []
     loss_vals = []
-    recompute_iter = 1
+    recompute_iter = 5
     
     typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
     corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
@@ -797,10 +797,10 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         
         # Recompute the probe stats
         if batch_idx % recompute_iter == 0:
-            typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
-            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
-            noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
-            
+            typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=True)
+            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", model_train_mode=True)
+            noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=True)
+
             # Concatenate with the probe trajectories
             all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
             aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
@@ -829,8 +829,11 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         B = torch.from_numpy(np.array(B)).to(device)
         
         class_scores = B.mean(dim=0)
-        selection_score = B[:, 1]  # Only take the prob for being corrupted
+        # selection_score = B[:, 1]  # Only take the prob for being corrupted
+        selection_score = B[:, 0]  # Only take the prob for being typical
         print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f} / Selection score: {selection_score.mean():.4f}")
+        # selection_score = torch.rand(len(data)).to(device)  # Uniform selection
+        model.train()
         
         # Perform selection based on the selection score (select the highest scoring examples)
         selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
@@ -1275,12 +1278,24 @@ def train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch
 
 ##############################################################################
 
-def test_tensor(model, data, target, msg=None, batch_size=None):
+def set_bn_train_mode(model, track_statistics):
+    for m in model.modules():
+        if isinstance(m, torch.nn.BatchNorm1d) or isinstance(m, torch.nn.BatchNorm2d) or \
+                isinstance(m, torch.nn.Dropout) or isinstance(m, torch.nn.Dropout2d):
+            m.train()
+            m.track_running_stats = track_statistics
+
+
+def test_tensor(model, data, target, msg=None, batch_size=None, model_train_mode=False):
     assert torch.is_tensor(data) and torch.is_tensor(target)
     assert len(data) == len(target), f"{len(data)} != {len(target)}"
     criterion = nn.CrossEntropyLoss(reduction='none')
     
-    model.eval()
+    if model_train_mode:
+        # model.train()
+        set_bn_train_mode(model, track_statistics=False)
+    else:
+        model.eval()
     with torch.no_grad():
         if batch_size is None or batch_size == len(data):
             output = model(data)
@@ -1314,8 +1329,11 @@ def test_tensor(model, data, target, msg=None, batch_size=None):
     output_dict = dict(loss=test_loss, acc=test_acc, correct=correct, total=total, 
                        loss_vals=loss_vals.detach().cpu().numpy())
     
+    if model_train_mode:  # To reset track statistics var
+        set_bn_train_mode(model, track_statistics=True)
+    
     if msg is not None:
-        print(f"{msg} | Average loss: {test_loss:.4f} | Accuracy: {correct}/{total} ({test_acc:.2f}%)")
+        print(f"{msg} | Mode: {'train' if model_train_mode else 'eval'} | Average loss: {test_loss:.4f} | Accuracy: {correct}/{total} ({test_acc:.2f}%)")
     
     return output_dict
 
