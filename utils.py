@@ -785,8 +785,13 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
     print(f"Train trajectories shape: {train_trajectories.shape}")
 
-    probe_trajectories = np.concatenate([typical_trajectories, corrupted_trajectories, noisy_trajectories], axis=0)
-    targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(corrupted_trajectories))] + [2 for _ in range(len(noisy_trajectories))])
+    use_three_sets = True
+    if use_three_sets:
+        probe_trajectories = np.concatenate([typical_trajectories, corrupted_trajectories, noisy_trajectories], axis=0)
+        targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(corrupted_trajectories))] + [2 for _ in range(len(noisy_trajectories))])
+    else:
+        probe_trajectories = np.concatenate([typical_trajectories, noisy_trajectories], axis=0)
+        targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(noisy_trajectories))])
     print(f"Combined probe trajectories: {probe_trajectories.shape} / Targets: {targets.shape}")
     
     n_neighbors = 20
@@ -798,12 +803,17 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         # Recompute the probe stats
         if batch_idx % recompute_iter == 0:
             typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=True)
-            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", model_train_mode=True)
+            if use_three_sets:
+                corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", model_train_mode=True)
             noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=True)
 
             # Concatenate with the probe trajectories
-            all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
-            aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+            if use_three_sets:
+                all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+                aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+            else:
+                all_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+                aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
             print(f"Probe shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {all_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
             clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
             clf.fit(aug_probe_trajectories, targets)
@@ -829,20 +839,33 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         assert use_probs
         assert isinstance(selection_batch_size, int)
         B = clf.predict_proba(aug_ex_trajs)  # 0 means typical and 1 means noisy
-        assert len(B.shape) == 2 and B.shape[1] == 3, B.shape
+        assert len(B.shape) == 2 and B.shape[1] == (3 if use_three_sets else 2), B.shape
         B = torch.from_numpy(np.array(B)).to(device)
         
         class_scores = B.mean(dim=0)
-        selection_score = B[:, 1]  # Only take the prob for being corrupted
-        # selection_score = B[:, 0] + B[:, 1]  # Only take the prob for being typical
-        print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f} / Selection score: {selection_score.mean():.4f}")
+        if use_three_sets:
+            assert len(class_scores) == 3, B.shape
+            print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f}")
+        else:
+            assert len(class_scores) == 2, B.shape
+            print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f}")
         # selection_score = torch.rand(len(data)).to(device)  # Uniform selection
         
         # Perform selection based on the selection score (select the highest scoring examples)
-        selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+        # selection_score = B[:, 1]  # Only take the prob for being corrupted
+        # selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+        
         # selected_indices = torch.argsort(B[:, 0], descending=True)[:selection_batch_size // 2]
         # second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
         # selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
+        
+        # Select typical examples (1/2 of the batch) having a confidence of about 50%, such that we dont select easiest examples
+        typical_score_diff = torch.abs(B[:, 0] - 0.6)  # Select examples with lowest typical scores 
+        selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size // 2]
+        second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
+        selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
+        # selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size]
+        
         assert len(selected_indices) == selection_batch_size, selected_indices.shape
         data, target = data[selected_indices], target[selected_indices]
 
@@ -871,30 +894,32 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
                        100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
 
-    # Concatenate the computed scores to the final list
-    example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
-    loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
-    
-    # Sort the loss list
-    sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
-    for i in range(len(example_idx)):
-        assert sorted_loss_list[example_idx[i]] is None
-        sorted_loss_list[example_idx[i]] = loss_vals[i]
-    assert not any([x is None for x in sorted_loss_list])
-    
-    # Append the loss list to loss trajectory
-    if trajectory_set is None:
-        trajectory_set = dict(train=[sorted_loss_list])
-    else:
-        assert "train" in trajectory_set
-        trajectory_set["train"].append(sorted_loss_list)
+    update_trajectory_list = False
+    if update_trajectory_list:
+        # Concatenate the computed scores to the final list
+        example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+        loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+        
+        # Sort the loss list
+        sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+        for i in range(len(example_idx)):
+            assert sorted_loss_list[example_idx[i]] is None
+            sorted_loss_list[example_idx[i]] = loss_vals[i]
+        assert not any([x is None for x in sorted_loss_list])
+        
+        # Append the loss list to loss trajectory
+        if trajectory_set is None:
+            trajectory_set = dict(train=[sorted_loss_list])
+        else:
+            assert "train" in trajectory_set
+            trajectory_set["train"].append(sorted_loss_list)
 
-    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
-    corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
-    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
-    trajectory_set["typical"].append(typical_stats["loss_vals"])
-    trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
-    trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+        trajectory_set["typical"].append(typical_stats["loss_vals"])
+        trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
+        trajectory_set["noisy"].append(noisy_stats["loss_vals"])
 
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
