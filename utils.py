@@ -776,7 +776,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     
     example_idx = []
     loss_vals = []
-    recompute_iter = 5
+    recompute_iter = 1
     
     typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
     corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
@@ -811,6 +811,8 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
         
         # Augment the loss trajectories with the current example loss
+        model.train()
+        set_bn_train_mode(model, track_statistics=False)
         with torch.no_grad():
             output = model(data, return_features=False)
             output = F.log_softmax(output, dim=1)
@@ -821,6 +823,8 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
 
             aug_ex_trajs = np.concatenate([ex_trajs, example_loss[:, None]], axis=1)  # Concatenate
             print(f"Example shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
+        set_bn_train_mode(model, track_statistics=True)
+        model.train()
         
         assert use_probs
         assert isinstance(selection_batch_size, int)
@@ -829,14 +833,17 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         B = torch.from_numpy(np.array(B)).to(device)
         
         class_scores = B.mean(dim=0)
-        # selection_score = B[:, 1]  # Only take the prob for being corrupted
-        selection_score = B[:, 0]  # Only take the prob for being typical
+        selection_score = B[:, 1]  # Only take the prob for being corrupted
+        # selection_score = B[:, 0] + B[:, 1]  # Only take the prob for being typical
         print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f} / Selection score: {selection_score.mean():.4f}")
         # selection_score = torch.rand(len(data)).to(device)  # Uniform selection
-        model.train()
         
         # Perform selection based on the selection score (select the highest scoring examples)
         selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+        # selected_indices = torch.argsort(B[:, 0], descending=True)[:selection_batch_size // 2]
+        # second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
+        # selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
+        assert len(selected_indices) == selection_batch_size, selected_indices.shape
         data, target = data[selected_indices], target[selected_indices]
 
         output = model(data, return_features=False)
