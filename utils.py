@@ -810,10 +810,9 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
             # Concatenate with the probe trajectories
             if use_three_sets:
                 all_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
-                aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
             else:
                 all_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
-                aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+            aug_probe_trajectories = np.concatenate([probe_trajectories, all_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
             print(f"Probe shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {all_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
             clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
             clf.fit(aug_probe_trajectories, targets)
@@ -860,7 +859,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         # selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
         
         # Select typical examples (1/2 of the batch) having a confidence of about 50%, such that we dont select easiest examples
-        typical_score_diff = torch.abs(B[:, 0] - 0.6)  # Select examples with lowest typical scores 
+        typical_score_diff = torch.abs(B[:, 0] - 0.5)  # Select examples with lowest typical scores 
         selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size // 2]
         second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
         selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
@@ -1312,11 +1311,9 @@ def train_mixUp_HardBootBeta(args, model, device, train_loader, optimizer, epoch
 
 def set_bn_train_mode(model, track_statistics):
     for m in model.modules():
-        if isinstance(m, torch.nn.BatchNorm1d) or isinstance(m, torch.nn.BatchNorm2d) or \
-                isinstance(m, torch.nn.Dropout) or isinstance(m, torch.nn.Dropout2d):
+        if isinstance(m, torch.nn.BatchNorm1d) or isinstance(m, torch.nn.BatchNorm2d):
             m.train()
             m.track_running_stats = track_statistics
-
 
 def test_tensor(model, data, target, msg=None, batch_size=None, model_train_mode=False):
     assert torch.is_tensor(data) and torch.is_tensor(target)
