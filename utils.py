@@ -693,7 +693,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                                                          class_names=None, inv_transform=None):
     model.train()
     loss_per_batch = []
-
+    
     acc_train_per_batch = []
     correct = 0
     total = 0
@@ -715,10 +715,11 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
     
-    use_uniform_sel = True
-    use_only_correct_class_score = False
+    use_uniform_sel = False
+    use_only_correct_class_score = True
     use_loss_val = False
     img_save_iter = 100
+    train_selection_mode = False
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -736,7 +737,8 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
             assert selection_batch_size is not None
             
             # Identify examples which are already learned (compute the prob)
-            model.eval()
+            if not train_selection_mode:
+                model.eval()
             with torch.no_grad():
                 output = model(data, return_features=False)
                 if use_loss_val:
@@ -744,7 +746,6 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 else:
                     output = F.softmax(output, dim=1)
                     correct_class_probs = output[torch.arange(len(output)), target]
-            model.train()
             
             if use_loss_val:
                 selection_score = F.nll_loss(output, target, reduction='none')
@@ -771,6 +772,8 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 B = B[:, 0]  # Only take the prob for being typical
                 
                 # Identify examples which are already learned (compute the prob)
+                if not train_selection_mode:
+                    model.eval()
                 with torch.no_grad():
                     output = model(data, return_features=False)
                     output = F.softmax(output, dim=1)
@@ -778,7 +781,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 typicality_score = B
                 not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
                 selection_score = (typicality_score + not_learned_score) / 2.
-                print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
                 
                 # Select examples with the highest probablity of being typical and lowest correct class prob
                 selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
@@ -801,6 +804,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
             print("Saving images to folder:", output_file)
             plot(inv_transform(data) if inv_transform is not None else data, target, ex_idx, class_names, output_file=output_file)
 
+        model.train()
         output = model(data, return_features=False)
         output = F.log_softmax(output, dim=1)
         pred = torch.max(output, dim=1)[1]
