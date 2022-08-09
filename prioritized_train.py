@@ -201,7 +201,7 @@ def main():
     inv_transform = InvTransform(mean, std, device)
 
     use_val_set = False
-    use_all_val_instances_for_probe = not args.use_three_set_prioritized_training  # Use all the remaining validation instances for probes
+    use_all_val_instances_for_probe = False # not args.use_three_set_prioritized_training  # Use all the remaining validation instances for probes
     if args.dataset == 'CIFAR10':
         trainset = datasets.CIFAR10(root=args.root_dir, train=True, download=True, transform=transform_train)
         trainset_track = datasets.CIFAR10(root=args.root_dir, train=True, transform=transform_train)

@@ -715,9 +715,10 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
     
+    online_probe_assignment = True
     use_uniform_sel = False
-    use_only_correct_class_score = True
-    use_only_typical_score = False
+    use_only_correct_class_score = False
+    use_only_typical_score = True
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
@@ -754,44 +755,74 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 print(f"Class scores / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
         
         else:
-            ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-            if selection_batch_size is not None:  # Typical score-based sample selection
-                assert use_probs
-                assert isinstance(selection_batch_size, int)
-                B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+            if online_probe_assignment:
+                assert selection_batch_size is not None
+                assert use_only_typical_score
+                assert not train_selection_mode
+                
+                typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+
+                # Fit the kNN model to the current probe stats
+                probe_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+                targets = np.array([0 for _ in range(len(typical_stats["loss_vals"]))] + [1 for _ in range(len(noisy_stats["loss_vals"]))])
+                clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+                clf.fit(probe_loss_vals, targets)
+                
+                # Compute the loss values for assignment
+                model.eval()
+                with torch.no_grad():
+                    output = model(data, return_features=False)
+                    output = F.log_softmax(output, dim=1)
+                    example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()[:, None]
+                model.train()
+                
+                B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
                 assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
                 B = torch.from_numpy(np.array(B)).to(device)
                 
                 class_scores = B.mean(dim=0)
-                B = B[:, 0]  # Only take the prob for being typical
-                
-                if use_only_typical_score:
-                    # TODO: Add option for class balanced sampling
-                    selection_score = B
-                    print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
-                else:
-                    # Identify examples which are already learned (compute the prob)
-                    if not train_selection_mode:
-                        model.eval()
-                    with torch.no_grad():
-                        output = model(data, return_features=False)
-                        output = F.softmax(output, dim=1)
-                        correct_class_probs = output[torch.arange(len(output)), target]
-                    typicality_score = B
-                    not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
-                    selection_score = (typicality_score + not_learned_score) / 2.
-                    print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                selection_score = B[:, 0]  # Only take the prob for being typical
+                print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
             
             else:
-                if use_probs:
+                ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+                if selection_batch_size is not None:  # Typical score-based sample selection
+                    assert use_probs
+                    assert isinstance(selection_batch_size, int)
                     B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
                     assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-                    B = B[:, 1]  # Only take the prob for being noisy
+                    B = torch.from_numpy(np.array(B)).to(device)
+                    
+                    class_scores = B.mean(dim=0)
+                    B = B[:, 0]  # Only take the prob for being typical
+                    
+                    if use_only_typical_score:
+                        selection_score = B
+                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                    else:
+                        # Identify examples which are already learned (compute the prob)
+                        if not train_selection_mode:
+                            model.eval()
+                        with torch.no_grad():
+                            output = model(data, return_features=False)
+                            output = F.softmax(output, dim=1)
+                            correct_class_probs = output[torch.arange(len(output)), target]
+                        typicality_score = B
+                        not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                        selection_score = (typicality_score + not_learned_score) / 2.
+                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                
                 else:
-                    B = clf.predict(ex_trajs)  # 1 means noisy
-                B = torch.from_numpy(np.array(B)).to(device)
-                B[B <= 1e-4] = 1e-4
-                B[B >= 1 - 1e-4] = 1 - 1e-4
+                    if use_probs:
+                        B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+                        assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+                        B = B[:, 1]  # Only take the prob for being noisy
+                    else:
+                        B = clf.predict(ex_trajs)  # 1 means noisy
+                    B = torch.from_numpy(np.array(B)).to(device)
+                    B[B <= 1e-4] = 1e-4
+                    B[B >= 1 - 1e-4] = 1 - 1e-4
         
         if selection_batch_size is not None:
             if class_balanced_sampling:
