@@ -88,6 +88,17 @@ class AddGaussianNoise(object):
         return torch.clip(tensor + torch.randn(tensor.size()) * self.std + self.mean, 0.0, 1.0)
 
 
+class InvTransform(object):
+    def __init__(self, mean, std, device):
+        assert len(mean) == 3
+        assert len(std) == 3
+        self.mean = torch.from_numpy(np.array(mean)).to(device)[None, :, None, None]
+        self.std = torch.from_numpy(np.array(std)).to(device)[None, :, None, None]
+    
+    def __call__(self, tensor):
+        return torch.clip((tensor * self.std) + self.mean, 0.0, 1.0)
+
+
 ######################### Get data and noise adding ##########################
 def get_data_cifar(loader):
     data = loader.sampler.data_source.train_data.copy()
@@ -472,6 +483,27 @@ def train_CrossEntropy_traj(args, model, device, train_loader, optimizer, epoch,
                 optimizer.param_groups[0]['lr'], len(data)))
 
     if selection_batch_size is None:  # Some samples are empty otherwise
+        recompute_train_stats = True
+        if recompute_train_stats:  # Recompute the statistics
+            print("Recomputing training statistics...")
+            model.eval()
+            
+            example_idx = []
+            loss_vals = []
+            
+            for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+                data, target = data.to(device), target.to(device)
+                
+                # Augment the loss trajectories with the current example loss
+                with torch.no_grad():
+                    output = model(data, return_features=False)
+                    output = F.log_softmax(output, dim=1)
+                    example_loss = F.nll_loss(output, target, reduction='none').clone().cpu()
+                    example_idx.append(ex_idx.clone().cpu())
+                    loss_vals.append(example_loss)
+            model.train()
+        
+        # Concatenate the computed scores to the final list
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
         loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
         
@@ -621,9 +653,44 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
         return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
 
 
+def plot(x, y=None, ex_idx=None, class_names=None, output_file=None):
+    num_plots_per_row = 8
+    plot_rows = 4
+    plot_size = 3
+    font_size = 16
+    fig, ax = plt.subplots(plot_rows, num_plots_per_row, figsize=(plot_size * num_plots_per_row, plot_size * plot_rows), sharex=True, sharey=True)
+
+    input = x.cpu().numpy()
+    is_grayscale = input.shape[1] == 1
+    input = input[:, 0, :, :] if is_grayscale else np.transpose(input, (0, 2, 3, 1))
+    if class_names is not None:
+        y = [class_names[int(i)] for i in y]
+    
+    for idx in range(len(input)):
+        ax[idx // num_plots_per_row, idx % num_plots_per_row].imshow(input[idx], cmap='gray' if is_grayscale else None)
+        if y is not None:
+            current_title = f"{'Label: ' if class_names is None else ''}{y[idx].replace('_', ' ').title()}{(' (' + str(int(ex_idx[idx])) + ')') if ex_idx is not None else ''}"
+            ax[idx // num_plots_per_row, idx % num_plots_per_row].set_title(current_title, color='k', fontsize=font_size)
+
+        if idx == plot_rows * num_plots_per_row - 1:
+            break
+
+    for a in ax.ravel():
+        a.set_axis_off()
+        a.set_yticklabels([])
+        a.set_xticklabels([])
+
+    fig.tight_layout()
+    if output_file is not None:
+        plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.show()
+    plt.close('all')
+
+
 def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, train_loader, optimizer, epoch,
                                                          reg_term, num_classes, probes, trajectory_set, use_probs,
-                                                         selection_batch_size=None):
+                                                         selection_batch_size=None, output_dir=None, 
+                                                         class_names=None, inv_transform=None):
     model.train()
     loss_per_batch = []
 
@@ -647,45 +714,92 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     n_neighbors = 20
     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
     clf.fit(probe_trajectories, targets)
+    
+    use_uniform_sel = True
+    use_only_correct_class_score = False
+    use_loss_val = False
+    img_save_iter = 100
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         
-        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
-        if selection_batch_size is not None:  # Typical score-based sample selection
-            assert use_probs
-            assert isinstance(selection_batch_size, int)
-            B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
-            assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-            B = torch.from_numpy(np.array(B)).to(device)
-            
-            class_scores = B.mean(dim=0)
-            B = B[:, 0]  # Only take the prob for being typical
-            
-            # Identify examples which are already learned (compute the prob)
-            with torch.no_grad():
-                output = model(data, return_features=False)
-                output = F.softmax(output, dim=1)
-                correct_class_probs = output[torch.arange(len(output)), target]
-            typicality_score = B
-            not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
-            selection_score = (typicality_score + not_learned_score) / 2.
-            print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+        if use_uniform_sel:
+            assert selection_batch_size is not None
+            selection_score = torch.rand(len(data)).to(device)  # Uniform selection
             
             # Select examples with the highest probablity of being typical and lowest correct class prob
             selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
-            data, target = data[selected_indices], target[selected_indices]
+            data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
+        
+        elif use_only_correct_class_score:
+            assert selection_batch_size is not None
+            
+            # Identify examples which are already learned (compute the prob)
+            model.eval()
+            with torch.no_grad():
+                output = model(data, return_features=False)
+                if use_loss_val:
+                    output = F.log_softmax(output, dim=1)
+                else:
+                    output = F.softmax(output, dim=1)
+                    correct_class_probs = output[torch.arange(len(output)), target]
+            model.train()
+            
+            if use_loss_val:
+                selection_score = F.nll_loss(output, target, reduction='none')
+                print(f"Loss val / Selection score: {selection_score.mean():.4f}")
+            else:
+                not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                selection_score = not_learned_score
+                print(f"Class scores / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+            
+            # Select examples with the highest probablity of being typical and lowest correct class prob
+            selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+            data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
+        
         else:
-            if use_probs:
+            ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+            if selection_batch_size is not None:  # Typical score-based sample selection
+                assert use_probs
+                assert isinstance(selection_batch_size, int)
                 B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
                 assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-                B = B[:, 1]  # Only take the prob for being noisy
+                B = torch.from_numpy(np.array(B)).to(device)
+                
+                class_scores = B.mean(dim=0)
+                B = B[:, 0]  # Only take the prob for being typical
+                
+                # Identify examples which are already learned (compute the prob)
+                with torch.no_grad():
+                    output = model(data, return_features=False)
+                    output = F.softmax(output, dim=1)
+                    correct_class_probs = output[torch.arange(len(output)), target]
+                typicality_score = B
+                not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                selection_score = (typicality_score + not_learned_score) / 2.
+                print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                
+                # Select examples with the highest probablity of being typical and lowest correct class prob
+                selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+                data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
+            
             else:
-                B = clf.predict(ex_trajs)  # 1 means noisy
-            B = torch.from_numpy(np.array(B)).to(device)
-            B[B <= 1e-4] = 1e-4
-            B[B >= 1 - 1e-4] = 1 - 1e-4
+                if use_probs:
+                    B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+                    assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+                    B = B[:, 1]  # Only take the prob for being noisy
+                else:
+                    B = clf.predict(ex_trajs)  # 1 means noisy
+                B = torch.from_numpy(np.array(B)).to(device)
+                B[B <= 1e-4] = 1e-4
+                B[B >= 1 - 1e-4] = 1 - 1e-4
+        
+        if output_dir is not None and selection_batch_size is not None and batch_idx % img_save_iter == 0:
+            assert len(data) == 32
+            output_file = os.path.join(output_dir, f"ep_{epoch}_iter_{batch_idx}_batch.png")
+            print("Saving images to folder:", output_file)
+            plot(inv_transform(data) if inv_transform is not None else data, target, ex_idx, class_names, output_file=output_file)
 
         output = model(data, return_features=False)
         output = F.log_softmax(output, dim=1)
@@ -777,15 +891,16 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     example_idx = []
     loss_vals = []
     recompute_iter = 1
-    
+
+    use_three_sets = False    
     typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
-    corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
+    if use_three_sets:
+        corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
     noisy_trajectories = np.array(trajectory_set["noisy"]).transpose(1, 0)
     train_trajectories = np.array(trajectory_set["train"]).transpose(1, 0)
     print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
     print(f"Train trajectories shape: {train_trajectories.shape}")
 
-    use_three_sets = True
     if use_three_sets:
         probe_trajectories = np.concatenate([typical_trajectories, corrupted_trajectories, noisy_trajectories], axis=0)
         targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(corrupted_trajectories))] + [2 for _ in range(len(noisy_trajectories))])
@@ -847,23 +962,26 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
             print(f"Class scores / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f}")
         else:
             assert len(class_scores) == 2, B.shape
-            print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f}")
+            print(f"Class scores / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f}", end='')
         # selection_score = torch.rand(len(data)).to(device)  # Uniform selection
         
-        # Perform selection based on the selection score (select the highest scoring examples)
-        # selection_score = B[:, 1]  # Only take the prob for being corrupted
-        # selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
-        
-        # selected_indices = torch.argsort(B[:, 0], descending=True)[:selection_batch_size // 2]
-        # second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
-        # selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
-        
-        # Select typical examples (1/2 of the batch) having a confidence of about 50%, such that we dont select easiest examples
-        typical_score_diff = torch.abs(B[:, 0] - 0.5)  # Select examples with lowest typical scores 
-        selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size // 2]
-        second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
-        selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
-        # selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size]
+        if use_three_sets:
+            # selected_indices = torch.argsort(B[:, 0], descending=True)[:selection_batch_size // 2]
+            # second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
+            # selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
+            
+            # Select typical examples (1/2 of the batch) having a confidence of about 50%, such that we dont select easiest examples
+            typical_score_diff = torch.abs(B[:, 0] - 0.5)  # Select examples with lowest typical scores 
+            selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size // 2]
+            second_selected_indices = torch.argsort(B[:, 1], descending=True)[:selection_batch_size]
+            selected_indices = torch.cat([selected_indices, second_selected_indices[:selection_batch_size-len(selected_indices)]], dim=0)
+            # selected_indices = torch.argsort(typical_score_diff, descending=False)[:selection_batch_size]
+        else:
+            # Perform selection based on the selection score (select the highest scoring examples)
+            # selection_score = B[:, 1]  # Only take the prob for being corrupted
+            selection_score = B[:, 0]  # Only take the prob for being typical
+            selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
+            print(f" / Selection Score: {selection_score.mean():.4f}")
         
         assert len(selected_indices) == selection_batch_size, selected_indices.shape
         data, target = data[selected_indices], target[selected_indices]
@@ -893,8 +1011,28 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
                        100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
 
-    update_trajectory_list = False
+    update_trajectory_list = True
     if update_trajectory_list:
+        recompute_train_stats = True
+        if recompute_train_stats:  # Recompute the statistics
+            print("Recomputing training statistics...")
+            model.eval()
+            
+            example_idx = []
+            loss_vals = []
+            
+            for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+                data, target = data.to(device), target.to(device)
+                
+                # Augment the loss trajectories with the current example loss
+                with torch.no_grad():
+                    output = model(data, return_features=False)
+                    output = F.log_softmax(output, dim=1)
+                    example_loss = F.nll_loss(output, target, reduction='none').clone().cpu()
+                    example_idx.append(ex_idx.clone().cpu())
+                    loss_vals.append(example_loss)
+            model.train()
+        
         # Concatenate the computed scores to the final list
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
         loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
@@ -914,11 +1052,12 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
             trajectory_set["train"].append(sorted_loss_list)
 
         typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
-        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
         noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
         trajectory_set["typical"].append(typical_stats["loss_vals"])
-        trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
         trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+        if use_three_sets:
+            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+            trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
 
     loss_per_epoch = [np.average(loss_per_batch)]
     acc_train_per_epoch = [np.average(acc_train_per_batch)]
