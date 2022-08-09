@@ -717,9 +717,11 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     
     use_uniform_sel = False
     use_only_correct_class_score = True
+    use_only_typical_score = False
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
+    class_balanced_sampling = True
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -728,10 +730,6 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
         if use_uniform_sel:
             assert selection_batch_size is not None
             selection_score = torch.rand(len(data)).to(device)  # Uniform selection
-            
-            # Select examples with the highest probablity of being typical and lowest correct class prob
-            selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
-            data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
         
         elif use_only_correct_class_score:
             assert selection_batch_size is not None
@@ -754,10 +752,6 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
                 selection_score = not_learned_score
                 print(f"Class scores / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
-            
-            # Select examples with the highest probablity of being typical and lowest correct class prob
-            selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
-            data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
         
         else:
             ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
@@ -771,21 +765,22 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 class_scores = B.mean(dim=0)
                 B = B[:, 0]  # Only take the prob for being typical
                 
-                # Identify examples which are already learned (compute the prob)
-                if not train_selection_mode:
-                    model.eval()
-                with torch.no_grad():
-                    output = model(data, return_features=False)
-                    output = F.softmax(output, dim=1)
-                    correct_class_probs = output[torch.arange(len(output)), target]
-                typicality_score = B
-                not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
-                selection_score = (typicality_score + not_learned_score) / 2.
-                print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
-                
-                # Select examples with the highest probablity of being typical and lowest correct class prob
-                selected_indices = torch.argsort(selection_score, descending=True)[:selection_batch_size]
-                data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
+                if use_only_typical_score:
+                    # TODO: Add option for class balanced sampling
+                    selection_score = B
+                    print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                else:
+                    # Identify examples which are already learned (compute the prob)
+                    if not train_selection_mode:
+                        model.eval()
+                    with torch.no_grad():
+                        output = model(data, return_features=False)
+                        output = F.softmax(output, dim=1)
+                        correct_class_probs = output[torch.arange(len(output)), target]
+                    typicality_score = B
+                    not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                    selection_score = (typicality_score + not_learned_score) / 2.
+                    print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
             
             else:
                 if use_probs:
@@ -798,11 +793,38 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 B[B <= 1e-4] = 1e-4
                 B[B >= 1 - 1e-4] = 1 - 1e-4
         
-        if output_dir is not None and selection_batch_size is not None and batch_idx % img_save_iter == 0:
-            assert len(data) == 32
-            output_file = os.path.join(output_dir, f"ep_{epoch}_iter_{batch_idx}_batch.png")
-            print("Saving images to folder:", output_file)
-            plot(inv_transform(data) if inv_transform is not None else data, target, ex_idx, class_names, output_file=output_file)
+        if selection_batch_size is not None:
+            if class_balanced_sampling:
+                expected_class_samples = int(selection_batch_size // num_classes)
+                num_cls_instances = [expected_class_samples for _ in range(num_classes)]
+                while np.sum(num_cls_instances) != selection_batch_size:
+                    rand_idx = np.random.randint(0, num_classes)
+                    num_cls_instances[rand_idx] += 1
+                # print("Expected class instances:", num_cls_instances)
+                
+                balanced_selected_indices = []
+                for cls in range(num_classes):
+                    current_scores = selection_score.clone()
+                    current_scores[target != cls] = -1.
+                    selected_indices = torch.argsort(current_scores, descending=True)[:num_cls_instances[cls]]
+                    balanced_selected_indices.append(selected_indices)
+                selected_indices = torch.cat(balanced_selected_indices, dim=0)
+                
+                # for cls in range(num_classes):
+                #     mask = target[selected_indices] == cls
+                #     print(f"Cls: {cls} / # instances: {mask.sum()}", end=' | ')
+            else:
+                # Select examples with the highest probablity of being typical and lowest correct class prob
+                selected_indices = torch.argsort(selection_score, descending=True)
+                selected_indices = selected_indices[:selection_batch_size]
+            
+            data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
+
+            if output_dir is not None and batch_idx % img_save_iter == 0:
+                assert len(data) == 32
+                output_file = os.path.join(output_dir, f"ep_{epoch}_iter_{batch_idx}_batch.png")
+                print("Saving images to folder:", output_file)
+                plot(inv_transform(data) if inv_transform is not None else data, target, ex_idx, class_names, output_file=output_file)
 
         model.train()
         output = model(data, return_features=False)
