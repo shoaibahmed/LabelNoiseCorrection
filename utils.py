@@ -759,9 +759,10 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 assert selection_batch_size is not None
                 assert use_only_typical_score
                 assert not train_selection_mode
+                use_sample_norm = True  # Sample normalization like in the train mode of BN, but no running stats
                 
-                typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
-                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+                typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=use_sample_norm)
+                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=use_sample_norm)
 
                 # Fit the kNN model to the current probe stats
                 probe_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
@@ -770,11 +771,19 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 clf.fit(probe_loss_vals, targets)
                 
                 # Compute the loss values for assignment
-                model.eval()
+                if use_sample_norm:
+                    model.train()
+                    set_bn_train_mode(model, track_statistics=False)
+                else:
+                    model.eval()
+                
                 with torch.no_grad():
                     output = model(data, return_features=False)
                     output = F.log_softmax(output, dim=1)
                     example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()[:, None]
+                
+                if use_sample_norm:
+                    set_bn_train_mode(model, track_statistics=True)
                 model.train()
                 
                 B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
@@ -783,7 +792,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 
                 class_scores = B.mean(dim=0)
                 selection_score = B[:, 0]  # Only take the prob for being typical
-                print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
             
             else:
                 ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
