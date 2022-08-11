@@ -576,6 +576,12 @@ def main():
         if not os.path.exists(probe_samples_path):
             os.makedirs(probe_samples_path)
         num_batches = int(np.ceil(len(probes["typical"]) / float(bs)))
+        
+        for cls in range(num_classes):
+            typical_instances = int((probes["typical_labels"] == cls).sum())
+            noisy_instances = int((probes["noisy_labels"] == cls).sum())
+            print(f"Class: {trainset.classes[cls]} / Typical probe instances: {typical_instances} / Noisy probe instances: {noisy_instances}")
+        
         for i in range(num_batches):
             output_file = os.path.join(probe_samples_path, f"typical_probes_{i+1}.png")
             plot(inv_transform(probes["typical"][i*bs:(i+1)*bs]), probes["typical_labels"][i*bs:(i+1)*bs], class_names=trainset.classes, output_file=output_file, plot_rows=8)
