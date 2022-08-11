@@ -571,11 +571,17 @@ def main():
     model_loaded = False
     
     if probes is not None:  # Validate the probes via plotting
-        output_file = os.path.join(exp_path, "typical_probes.png")
-        plot(inv_transform(probes["typical"]), probes["typical_labels"], class_names=trainset.classes, output_file=output_file, plot_rows=8)
-        
-        output_file = os.path.join(exp_path, "mislabeled_probes.png")
-        plot(inv_transform(probes["noisy"]), probes["noisy_labels"], class_names=trainset.classes, output_file=output_file, plot_rows=8)
+        bs = 64
+        probe_samples_path = os.path.join(exp_path, "probe_samples")
+        if not os.path.exists(probe_samples_path):
+            os.makedirs(probe_samples_path)
+        num_batches = int(np.ceil(len(probes["typical"]) / float(bs)))
+        for i in range(num_batches):
+            output_file = os.path.join(probe_samples_path, f"typical_probes_{i+1}.png")
+            plot(inv_transform(probes["typical"][i*bs:(i+1)*bs]), probes["typical_labels"][i*bs:(i+1)*bs], class_names=trainset.classes, output_file=output_file, plot_rows=8)
+            
+            output_file = os.path.join(probe_samples_path, f"mislabeled_probes_{i+1}.png")
+            plot(inv_transform(probes["noisy"][i*bs:(i+1)*bs]), probes["noisy_labels"][i*bs:(i+1)*bs], class_names=trainset.classes, output_file=output_file, plot_rows=8)
         print("Probe samples written to file...")
 
     for epoch in range(1, args.epochs + 1):
