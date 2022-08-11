@@ -722,8 +722,10 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
-    class_balanced_sampling = True
-
+    class_balanced_sampling = False
+    use_distance = True
+    descending_sort = True
+    
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
@@ -761,38 +763,67 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 assert not train_selection_mode
                 use_sample_norm = True  # Sample normalization like in the train mode of BN, but no running stats
                 
-                typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=use_sample_norm)
-                noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=use_sample_norm)
-
-                # Fit the kNN model to the current probe stats
-                probe_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
-                targets = np.array([0 for _ in range(len(typical_stats["loss_vals"]))] + [1 for _ in range(len(noisy_stats["loss_vals"]))])
-                clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
-                clf.fit(probe_loss_vals, targets)
-                
-                # Compute the loss values for assignment
-                if use_sample_norm:
+                if use_distance:
+                    descending_sort = False  # Pick examples with minimum dist
+                    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=use_sample_norm)
+                    typical_loss_vals = typical_stats["loss_vals"]
+                    
+                    # Compute the loss values for assignment
+                    if use_sample_norm:
+                        model.train()
+                        set_bn_train_mode(model, track_statistics=False)
+                    else:
+                        model.eval()
+                    
+                    with torch.no_grad():
+                        output = model(data, return_features=False)
+                        output = F.log_softmax(output, dim=1)
+                        example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()[:, None]
+                    
+                    if use_sample_norm:
+                        set_bn_train_mode(model, track_statistics=True)
                     model.train()
-                    set_bn_train_mode(model, track_statistics=False)
+                    
+                    # Convert the scores to M x N matrix where M is the number of samples in batch, and N is the typical probe examples
+                    dist_mat = torch.from_numpy(example_loss).to(device) - torch.from_numpy(typical_loss_vals).to(device)[None, :]  # M x 1 - 1 x N = M x N
+                    dist_mat = (dist_mat ** 2) ** 0.5
+                    selection_score = dist_mat.mean(dim=1)
+                    assert len(selection_score) == len(example_loss)
+                    
+                    print(f"Online class distance / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Min dist: {selection_score.min():.4f} / Max dist: {selection_score.max():.4f} / Mean dist: {selection_score.mean():.4f}")
                 else:
-                    model.eval()
-                
-                with torch.no_grad():
-                    output = model(data, return_features=False)
-                    output = F.log_softmax(output, dim=1)
-                    example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()[:, None]
-                
-                if use_sample_norm:
-                    set_bn_train_mode(model, track_statistics=True)
-                model.train()
-                
-                B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
-                assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
-                B = torch.from_numpy(np.array(B)).to(device)
-                
-                class_scores = B.mean(dim=0)
-                selection_score = B[:, 0]  # Only take the prob for being typical
-                print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                    typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=use_sample_norm)
+                    noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=use_sample_norm)
+
+                    # Fit the kNN model to the current probe stats
+                    probe_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+                    targets = np.array([0 for _ in range(len(typical_stats["loss_vals"]))] + [1 for _ in range(len(noisy_stats["loss_vals"]))])
+                    clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+                    clf.fit(probe_loss_vals, targets)
+                    
+                    # Compute the loss values for assignment
+                    if use_sample_norm:
+                        model.train()
+                        set_bn_train_mode(model, track_statistics=False)
+                    else:
+                        model.eval()
+                    
+                    with torch.no_grad():
+                        output = model(data, return_features=False)
+                        output = F.log_softmax(output, dim=1)
+                        example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()[:, None]
+                    
+                    if use_sample_norm:
+                        set_bn_train_mode(model, track_statistics=True)
+                    model.train()
+                    
+                    B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
+                    assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+                    B = torch.from_numpy(np.array(B)).to(device)
+                    
+                    class_scores = B.mean(dim=0)
+                    selection_score = B[:, 0]  # Only take the prob for being typical
+                    print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
             
             else:
                 ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
@@ -846,7 +877,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 for cls in range(num_classes):
                     current_scores = selection_score.clone()
                     current_scores[target != cls] = -1.
-                    selected_indices = torch.argsort(current_scores, descending=True)[:num_cls_instances[cls]]
+                    selected_indices = torch.argsort(current_scores, descending=descending_sort)[:num_cls_instances[cls]]
                     balanced_selected_indices.append(selected_indices)
                 selected_indices = torch.cat(balanced_selected_indices, dim=0)
                 
@@ -855,7 +886,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 #     print(f"Cls: {cls} / # instances: {mask.sum()}", end=' | ')
             else:
                 # Select examples with the highest probablity of being typical and lowest correct class prob
-                selected_indices = torch.argsort(selection_score, descending=True)
+                selected_indices = torch.argsort(selection_score, descending=descending_sort)
                 selected_indices = selected_indices[:selection_batch_size]
             
             data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
