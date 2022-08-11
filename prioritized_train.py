@@ -569,6 +569,14 @@ def main():
     prob_model = None
     trajectory_set = {"typical": [], "corrupted": [], "noisy": [], "train": []}
     model_loaded = False
+    
+    if probes is not None:  # Validate the probes via plotting
+        output_file = os.path.join(exp_path, "typical_probes.png")
+        plot(inv_transform(probes["typical"]), probes["typical_labels"], class_names=trainset.classes, output_file=output_file, plot_rows=8)
+        
+        output_file = os.path.join(exp_path, "mislabeled_probes.png")
+        plot(inv_transform(probes["noisy"]), probes["noisy_labels"], class_names=trainset.classes, output_file=output_file, plot_rows=8)
+        print("Probe samples written to file...")
 
     for epoch in range(1, args.epochs + 1):
         # train

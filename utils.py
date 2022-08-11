@@ -653,9 +653,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical(args, model, device, train_
         return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
 
 
-def plot(x, y=None, ex_idx=None, class_names=None, output_file=None):
-    num_plots_per_row = 8
-    plot_rows = 4
+def plot(x, y=None, ex_idx=None, class_names=None, output_file=None, num_plots_per_row=8, plot_rows=4):
     plot_size = 3
     font_size = 16
     fig, ax = plt.subplots(plot_rows, num_plots_per_row, figsize=(plot_size * num_plots_per_row, plot_size * plot_rows), sharex=True, sharey=True)
@@ -722,7 +720,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
-    class_balanced_sampling = False
+    class_balanced_sampling = True
     use_distance = True
     descending_sort = True
     
@@ -876,7 +874,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 balanced_selected_indices = []
                 for cls in range(num_classes):
                     current_scores = selection_score.clone()
-                    current_scores[target != cls] = -1.
+                    current_scores[target != cls] = -100000. if descending_sort else 100000.
                     selected_indices = torch.argsort(current_scores, descending=descending_sort)[:num_cls_instances[cls]]
                     balanced_selected_indices.append(selected_indices)
                 selected_indices = torch.cat(balanced_selected_indices, dim=0)
