@@ -570,7 +570,8 @@ def main():
     trajectory_set = {"typical": [], "corrupted": [], "noisy": [], "train": []}
     model_loaded = False
     
-    if probes is not None:  # Validate the probes via plotting
+    if probes is not None and "typical" in probes:  # Validate the probes via plotting
+        assert "noisy" in probes, probes.keys()
         bs = 64
         probe_samples_path = os.path.join(exp_path, "probe_samples")
         if not os.path.exists(probe_samples_path):
@@ -802,7 +803,7 @@ def main():
                                 if not os.path.exists(batch_output_path):
                                     os.makedirs(batch_output_path)
                                 print(f'\t##### Doing CE loss-based training with score-based (typicality + conf) online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
-                                train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
+                                _, _, trajectory_set = train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
                                                                                     num_classes, probes, trajectory_set, not args.use_binary_prediction,
                                                                                     selection_batch_size=args.selection_batch_size, output_dir=batch_output_path, 
                                                                                     class_names=trainset.classes, inv_transform=inv_transform)
