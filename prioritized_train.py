@@ -799,6 +799,18 @@ def main():
                                                                                                                     num_classes, probes, trajectory_set, not args.use_binary_prediction,
                                                                                                                     selection_batch_size=args.selection_batch_size)
                             else:
+                                replace_fake_samples = True
+                                if epoch == 1 and replace_fake_samples:
+                                    print("Adding fake loss values of zero instead of the actual trajectories...")
+                                    trajectory_set["typical"] = []
+                                    trajectory_set["typical"].append([0. for _ in range(len(probes["typical"]))])
+                                    # trajectory_set["corrupted"] = []
+                                    # trajectory_set["corrupted"].append([0. for _ in range(len(probes["corrupted"]))])
+                                    trajectory_set["noisy"] = []
+                                    trajectory_set["noisy"].append([0. for _ in range(len(probes["noisy"]))])
+                                    trajectory_set["train"] = []
+                                    trajectory_set["train"].append([0. for _ in range(len(idx_dataset))])
+                                
                                 batch_output_path = os.path.join(exp_path, "batch_outputs")
                                 if not os.path.exists(batch_output_path):
                                     os.makedirs(batch_output_path)

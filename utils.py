@@ -714,18 +714,20 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     clf.fit(probe_trajectories, targets)
     
     online_probe_assignment = True
+    use_complete_trajectory = True
     use_uniform_sel = False
     use_only_correct_class_score = False
     use_only_typical_score = False
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
-    class_balanced_sampling = True
+    class_balanced_sampling = False
     use_distance = False
     descending_sort = True
     
     # num_uniform_iters = len(train_loader) // 2
     num_uniform_iters = None
+    assert not use_complete_trajectory or online_probe_assignment
     
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -788,6 +790,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                 if use_distance:
                     if not use_only_typical_score:
                         raise NotImplementedError("Score-based selection with typical identification is not supported with distance computation...")
+                    assert not use_complete_trajectory, "Not implemented yet..."
 
                     descending_sort = False  # Pick examples with minimum dist
                     typical_loss_vals = typical_stats["loss_vals"]
@@ -810,9 +813,22 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                     probe_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
                     targets = np.array([0 for _ in range(len(typical_stats["loss_vals"]))] + [1 for _ in range(len(noisy_stats["loss_vals"]))])
                     clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
-                    clf.fit(probe_loss_vals, targets)
+                    if use_complete_trajectory:
+                        # Add the functionality to concatenate the features
+                        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+                        
+                        aug_probe_trajectories = np.concatenate([probe_trajectories, probe_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+                        print(f"Probe shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {probe_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
+                        clf.fit(aug_probe_trajectories, targets)
+                    else:
+                        clf.fit(probe_loss_vals, targets)
                     
-                    B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
+                    if use_complete_trajectory:
+                        aug_ex_trajs = np.concatenate([ex_trajs, example_loss], axis=1)  # Concatenate
+                        print(f"Example shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
+                        B = clf.predict_proba(aug_ex_trajs)  # 0 means typical and 1 means noisy
+                    else:
+                        B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
                     assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
                     B = torch.from_numpy(np.array(B)).to(device)
                     
@@ -943,7 +959,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                        100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
 
-    update_trajectory_list = not online_probe_assignment
+    update_trajectory_list = use_complete_trajectory # not online_probe_assignment
     if update_trajectory_list:
         recompute_train_stats = True
         if recompute_train_stats:  # Recompute the statistics
