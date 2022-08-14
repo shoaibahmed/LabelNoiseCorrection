@@ -721,7 +721,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
-    class_balanced_sampling = False
+    class_balanced_sampling = True
     use_distance = False
     descending_sort = True
     
@@ -739,10 +739,17 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
         
         elif use_only_correct_class_score:
             assert selection_batch_size is not None
+            use_sample_norm = True  # Sample normalization like in the train mode of BN, but no running stats
             
             # Identify examples which are already learned (compute the prob)
             if not train_selection_mode:
-                model.eval()
+                # Compute the loss values for assignment
+                if use_sample_norm:
+                    model.train()
+                    set_bn_train_mode(model, track_statistics=False)
+                else:
+                    model.eval()
+            
             with torch.no_grad():
                 output = model(data, return_features=False)
                 if use_loss_val:
@@ -751,13 +758,18 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                     output = F.softmax(output, dim=1)
                     correct_class_probs = output[torch.arange(len(output)), target]
             
+            if not train_selection_mode:
+                if use_sample_norm:
+                    set_bn_train_mode(model, track_statistics=True)
+                model.train()
+            
             if use_loss_val:
                 selection_score = F.nll_loss(output, target, reduction='none')
-                print(f"Loss val / Selection score: {selection_score.mean():.4f}")
+                print(f"Correct class loss / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Selection score: {selection_score.mean():.4f}")
             else:
                 not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
                 selection_score = not_learned_score
-                print(f"Class scores / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                print(f"Correct class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
         
         else:
             if online_probe_assignment:
@@ -959,13 +971,19 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                        100. * correct / total,
                 optimizer.param_groups[0]['lr'], len(data)))
 
-    update_trajectory_list = use_complete_trajectory # not online_probe_assignment
+    update_trajectory_list = use_complete_trajectory and not (use_only_correct_class_score or use_uniform_sel)
     if update_trajectory_list:
         recompute_train_stats = True
         if recompute_train_stats:  # Recompute the statistics
             print("Recomputing training statistics...")
+            # Compute the loss values for assignment
+            # if use_sample_norm:
+            #     model.train()
+            #     set_bn_train_mode(model, track_statistics=False)
+            # else:
+            #     model.eval()
             model.eval()
-            
+        
             example_idx = []
             loss_vals = []
             
@@ -979,6 +997,8 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                     example_loss = F.nll_loss(output, target, reduction='none').clone().cpu()
                     example_idx.append(ex_idx.clone().cpu())
                     loss_vals.append(example_loss)
+            # if use_sample_norm:
+            #     set_bn_train_mode(model, track_statistics=True)
             model.train()
         
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()

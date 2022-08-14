@@ -800,7 +800,7 @@ def main():
                                                                                                                     selection_batch_size=args.selection_batch_size)
                             else:
                                 replace_fake_samples = True
-                                if epoch == 1 and replace_fake_samples:
+                                if epoch == 1 and replace_fake_samples and probes is not None and "typical" in probes:
                                     print("Adding fake loss values of zero instead of the actual trajectories...")
                                     trajectory_set["typical"] = []
                                     trajectory_set["typical"].append([0. for _ in range(len(probes["typical"]))])
