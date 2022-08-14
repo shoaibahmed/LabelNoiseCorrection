@@ -765,11 +765,11 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
             
             if use_loss_val:
                 selection_score = F.nll_loss(output, target, reduction='none')
-                print(f"Correct class loss / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Selection score: {selection_score.mean():.4f}")
+                print(f"Correct class loss / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Selection score: {selection_score.mean():.4f}")
             else:
                 not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
                 selection_score = not_learned_score
-                print(f"Correct class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                print(f"Correct class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
         
         else:
             if online_probe_assignment:
@@ -817,7 +817,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                     selection_score = dist_mat.quantile(0.25, dim=1)
                     assert len(selection_score) == len(example_loss)
                     
-                    print(f"Online class distance / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Min dist: {selection_score.min():.8f} / Max dist: {selection_score.max():.4f} / Mean dist: {selection_score.mean():.4f}")
+                    print(f"Online class distance / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Min dist: {selection_score.min():.8f} / Max dist: {selection_score.max():.4f} / Mean dist: {selection_score.mean():.4f}")
                 else:
                     noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=use_sample_norm or train_selection_mode)
 
@@ -847,12 +847,12 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                     class_scores = B.mean(dim=0)
                     if use_only_typical_score:
                         selection_score = B[:, 0]  # Only take the prob for being typical
-                        print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                        print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
                     else:
                         not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
                         typicality_score = B[:, 0]  # Only take the prob for being typical
                         selection_score = (typicality_score + not_learned_score) / 2.
-                        print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                        print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
             
             else:
                 ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
@@ -868,7 +868,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                     
                     if use_only_typical_score:
                         selection_score = B
-                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
                     else:
                         # Identify examples which are already learned (compute the prob)
                         if not train_selection_mode:
@@ -880,7 +880,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
                         typicality_score = B
                         not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
                         selection_score = (typicality_score + not_learned_score) / 2.
-                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
                 
                 else:
                     if use_probs:
