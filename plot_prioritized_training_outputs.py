@@ -116,7 +116,7 @@ num_epochs = np.min(epoch_list)
 print("Number of epochs selected:", num_epochs)
 
 fig, ax = plt.subplots()
-fig.set_size_inches(10, 6)
+fig.set_size_inches(12, 8)
 
 line_styles = ['solid', 'dashed', 'dashdot', 'dotted']
 marker_list = ['o', '*', 'X', 'P', 'p', 'D', 'v', '^', 'h', '1', '2', '3', '4']
@@ -145,24 +145,24 @@ for idx in range(len(model_types)):
     # line = plt.plot(epochs, accs, linewidth=4., marker=marker_list[idx % len(marker_list)],
     #                 color=marker_colors[idx], alpha=0.6, markeredgecolor='k', markersize=9, label=f"{model_types[idx]}")
     line = plt.plot(epochs, accs, linewidth=4., color=marker_colors[current_iterator], alpha=0.8 if is_mean else 0.3, label=f"{model_types[idx].replace(' (Mean)', '')}")
-    plt.fill_between(epochs, accs - accs_std, accs + accs_std, color=marker_colors[current_iterator], alpha=0.25)
+    plt.fill_between(epochs, accs - accs_std, accs + accs_std, color=marker_colors[current_iterator], alpha=0.1)
     line[0].set_color(marker_colors[current_iterator])
     # line[0].set_linestyle(line_styles[% len(line_styles)])
     current_iterator += 1
 
-font_size = 16
-plt.xlabel('Epochs (%)', fontsize=font_size)
+font_size = 22
+plt.xlabel('Epochs', fontsize=font_size)
 plt.ylabel('Test Accuracy (%)', fontsize=font_size)
-plt.legend(prop={'size': font_size})
-plt.ylim(60., 73.)
-plt.xlim(0., num_epochs)
+plt.legend(prop={'size': font_size}, loc='center right', bbox_to_anchor=(1.9, 0.5), ncol=1)
+plt.ylim(60., 75.)
+plt.xlim(1., num_epochs-1)
 # plt.xticks(list(range(1, 5)))
-plt.tight_layout()
 
 plt.xticks(fontsize=font_size)
 plt.yticks(fontsize=font_size)
 
+plt.tight_layout()
 if output_file is not None:
-    plt.savefig(output_file, dpi=300)
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
 plt.show()
 plt.close('all')
