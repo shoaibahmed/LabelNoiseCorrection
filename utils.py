@@ -1070,7 +1070,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
-    class_balanced_sampling = False
+    class_balanced_sampling = True
     use_distance = False
     descending_sort = True
     
@@ -1341,12 +1341,12 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
         if recompute_train_stats:  # Recompute the statistics
             print("Recomputing training statistics...")
             # Compute the loss values for assignment
-            # if use_sample_norm:
-            #     model.train()
-            #     set_bn_train_mode(model, track_statistics=False)
-            # else:
-            #     model.eval()
-            model.eval()
+            if use_sample_norm:
+                model.train()
+                set_bn_train_mode(model, track_statistics=False)
+            else:
+                model.eval()
+            # model.eval()
         
             example_idx = []
             loss_vals = []
@@ -1361,8 +1361,8 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, 
                     example_loss = F.nll_loss(output, target, reduction='none').clone().cpu()
                     example_idx.append(ex_idx.clone().cpu())
                     loss_vals.append(example_loss)
-            # if use_sample_norm:
-            #     set_bn_train_mode(model, track_statistics=True)
+            if use_sample_norm:
+                set_bn_train_mode(model, track_statistics=True)
             model.train()
         
         example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
