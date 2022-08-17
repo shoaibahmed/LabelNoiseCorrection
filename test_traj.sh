@@ -1,19 +1,20 @@
 #!/bin/bash
 
-for noise_level in 0 20 50 70 80 90; do
+# for noise_level in 0 20 50 70 80 90; do
+for noise_level in 0; do
     ### Original M-DYR-H config from the paper with regularization
-    for seed in 1 2 3; do
-        job=cifar10_noise_${noise_level}_m_dyr_h_bmm_treatment_bootstrap_10ep_seed_${seed}
-        srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
-            --kill-on-bad-exit --job-name ${job} --nice=0 \
-            --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
-            --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
-            /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train_three_subs.py --Mixup 'Static' --experiment-name "CIFAR10-M-DYR-H-BMM-Treatment-Bootstrap-10Ep-Seed-${seed}" --BootBeta "Hard" \
-                --epochs 300 --M 100 250 --noise-level ${noise_level} --reg-term 1.0 --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ --seed ${seed} --bootstrap-epochs 10 \
-                > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs_traj_new/${job}.log 2>&1 &
+    for seed in 2; do
+        # job=cifar10_noise_${noise_level}_m_dyr_h_bmm_treatment_bootstrap_10ep_seed_${seed}
+        # srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
+        #     --kill-on-bad-exit --job-name ${job} --nice=0 \
+        #     --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
+        #     --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
+        #     /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train_three_subs.py --Mixup 'Static' --experiment-name "CIFAR10-M-DYR-H-BMM-Treatment-Bootstrap-10Ep-Seed-${seed}" --BootBeta "Hard" \
+        #         --epochs 300 --M 100 250 --noise-level ${noise_level} --reg-term 1.0 --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ --seed ${seed} --bootstrap-epochs 10 \
+        #         > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs_traj_new/${job}.log 2>&1 &
 
         job=cifar100_noise_${noise_level}_m_dyr_h_bmm_treatment_bootstrap_10ep_seed_${seed}
-        srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
+        srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
             --kill-on-bad-exit --job-name ${job} --nice=0 \
             --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
             --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
@@ -22,22 +23,23 @@ for noise_level in 0 20 50 70 80 90; do
                 > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs_traj_new/${job}.log 2>&1 &
     done
 done
+exit
 
 for noise_level in 0 20 50 70 80 90; do
-    for seed in 1 2 3; do
-        job=cifar10_noise_${noise_level}_m_dyr_h_probe_traj_prob_bootstrap_10ep_seed_${seed}
-        srun -p batch -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=3-00:00:00 \
-            --kill-on-bad-exit --job-name ${job} --nice=0 \
-            --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
-            --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
-            /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train_three_subs.py --Mixup 'Static' --experiment-name "CIFAR10-M-DYR-H-Probe-Traj-Prob-Bootstrap-10Ep-Seed-${seed}" --BootBeta "HardProbes" \
-                --epochs 300 --M 100 250 --noise-level ${noise_level} --reg-term 1.0 --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
-                --use-mislabeled-examples --use-loss-trajectories --use-probes-for-pretraining --seed ${seed} \
-                --use-gmm-probe-identification --bootstrap-epochs 10 --num-example-probes 250 \
-                > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs_traj_new/${job}.log 2>&1 &
+    for seed in 3; do
+        # job=cifar10_noise_${noise_level}_m_dyr_h_probe_traj_prob_bootstrap_10ep_seed_${seed}
+        # srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
+        #     --kill-on-bad-exit --job-name ${job} --nice=0 \
+        #     --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
+        #     --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \
+        #     /opt/conda/bin/python /netscratch/siddiqui/Repositories/LabelNoiseCorrection/train_three_subs.py --Mixup 'Static' --experiment-name "CIFAR10-M-DYR-H-Probe-Traj-Prob-Bootstrap-10Ep-Seed-${seed}" --BootBeta "HardProbes" \
+        #         --epochs 300 --M 100 250 --noise-level ${noise_level} --reg-term 1.0 --dataset CIFAR10 --root-dir /netscratch/siddiqui/Repositories/data/cifar10/ \
+        #         --use-mislabeled-examples --use-loss-trajectories --use-probes-for-pretraining --seed ${seed} \
+        #         --use-gmm-probe-identification --bootstrap-epochs 10 --num-example-probes 250 \
+        #         > /netscratch/siddiqui/Repositories/LabelNoiseCorrection/logs_traj_new/${job}.log 2>&1 &
 
         job=cifar100_noise_${noise_level}_m_dyr_h_probe_traj_prob_bootstrap_10ep_seed_${seed}
-        srun -p RTXA6000 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
+        srun -p RTX3090 -K -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-gpu=4 --mem=24G --time=1-00:00:00 \
             --kill-on-bad-exit --job-name ${job} --nice=0 \
             --container-mounts=/netscratch:/netscratch,/ds:/ds,/home/siddiqui:/home/siddiqui --container-image=/netscratch/enroot/nvcr.io_nvidia_pytorch_21.06-py3.sqsh \
             --container-workdir=`pwd` --container-mount-home --export="NCCL_SOCKET_IFNAME=bond,NCCL_IB_HCA=mlx5" \

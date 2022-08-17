@@ -721,7 +721,7 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
     use_loss_val = False
     img_save_iter = 100
     train_selection_mode = False
-    class_balanced_sampling = True
+    class_balanced_sampling = False
     use_distance = False
     descending_sort = True
     
@@ -1029,6 +1029,373 @@ def train_CrossEntropy_loss_traj_prioritized_typical_rho(args, model, device, tr
 
 
 def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, train_loader, optimizer, epoch,
+                                                         reg_term, num_classes, probes, trajectory_set, use_probs,
+                                                         selection_batch_size=None, output_dir=None, 
+                                                         class_names=None, inv_transform=None):
+    model.train()
+    loss_per_batch = []
+    
+    acc_train_per_batch = []
+    correct = 0
+    total = 0
+    
+    example_idx = []
+    loss_vals = []
+    use_three_sets = True
+    
+    typical_trajectories = np.array(trajectory_set["typical"]).transpose(1, 0)
+    noisy_trajectories = np.array(trajectory_set["noisy"]).transpose(1, 0)
+    train_trajectories = np.array(trajectory_set["train"]).transpose(1, 0)
+    print(f"Train trajectories shape: {train_trajectories.shape}")
+    if use_three_sets:
+        corrupted_trajectories = np.array(trajectory_set["corrupted"]).transpose(1, 0)
+        print(f"Typical trajectory size: {typical_trajectories.shape} / Corrupted trajectory size: {corrupted_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
+        probe_trajectories = np.concatenate([typical_trajectories, corrupted_trajectories, noisy_trajectories], axis=0)
+        targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(corrupted_trajectories))] + [2 for _ in range(len(noisy_trajectories))])
+    else:
+        print(f"Typical trajectory size: {typical_trajectories.shape} / Noisy trajectories shape: {noisy_trajectories.shape}")
+        probe_trajectories = np.concatenate([typical_trajectories, noisy_trajectories], axis=0)
+        targets = np.array([0 for _ in range(len(typical_trajectories))] + [1 for _ in range(len(noisy_trajectories))])
+    print(f"Combined probe trajectories: {probe_trajectories.shape} / Targets: {targets.shape}")
+    
+    n_neighbors = 20
+    clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+    clf.fit(probe_trajectories, targets)
+    
+    online_probe_assignment = True
+    use_complete_trajectory = True
+    use_uniform_sel = False
+    use_only_correct_class_score = False
+    use_only_typical_score = False
+    use_loss_val = False
+    img_save_iter = 100
+    train_selection_mode = False
+    class_balanced_sampling = False
+    use_distance = False
+    descending_sort = True
+    
+    # num_uniform_iters = len(train_loader) // 2
+    num_uniform_iters = None
+    assert not use_complete_trajectory or online_probe_assignment
+    
+    for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        
+        if use_uniform_sel or (num_uniform_iters is not None and batch_idx < num_uniform_iters and epoch == 1):
+            assert selection_batch_size is not None
+            selection_score = torch.rand(len(data)).to(device)  # Uniform selection
+        
+        elif use_only_correct_class_score:
+            assert selection_batch_size is not None
+            use_sample_norm = True  # Sample normalization like in the train mode of BN, but no running stats
+            
+            # Identify examples which are already learned (compute the prob)
+            if not train_selection_mode:
+                # Compute the loss values for assignment
+                if use_sample_norm:
+                    model.train()
+                    set_bn_train_mode(model, track_statistics=False)
+                else:
+                    model.eval()
+            
+            with torch.no_grad():
+                output = model(data, return_features=False)
+                if use_loss_val:
+                    output = F.log_softmax(output, dim=1)
+                else:
+                    output = F.softmax(output, dim=1)
+                    correct_class_probs = output[torch.arange(len(output)), target]
+            
+            if not train_selection_mode:
+                if use_sample_norm:
+                    set_bn_train_mode(model, track_statistics=True)
+                model.train()
+            
+            if use_loss_val:
+                selection_score = F.nll_loss(output, target, reduction='none')
+                print(f"Correct class loss / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Selection score: {selection_score.mean():.4f}")
+            else:
+                not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                selection_score = not_learned_score
+                print(f"Correct class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+        
+        else:
+            if online_probe_assignment:
+                assert selection_batch_size is not None
+                # assert use_only_typical_score
+                # assert not train_selection_mode
+                use_sample_norm = True  # Sample normalization like in the train mode of BN, but no running stats
+                
+                if not train_selection_mode:
+                    # Compute the loss values for assignment
+                    if use_sample_norm:
+                        model.train()
+                        set_bn_train_mode(model, track_statistics=False)
+                    else:
+                        model.eval()
+                
+                with torch.no_grad():
+                    output = model(data, return_features=False)
+                    probs = F.softmax(output, dim=1)
+                    correct_class_probs = probs[torch.arange(len(probs)), target]
+                    output = F.log_softmax(output, dim=1)
+                    example_loss = F.nll_loss(output, target, reduction='none').clone().cpu().numpy()[:, None]
+                
+                if not train_selection_mode:
+                    if use_sample_norm:
+                        set_bn_train_mode(model, track_statistics=True)
+                    model.train()
+                typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe", model_train_mode=use_sample_norm or train_selection_mode)
+                
+                if use_distance:
+                    if not use_only_typical_score:
+                        raise NotImplementedError("Score-based selection with typical identification is not supported with distance computation...")
+                    assert not use_complete_trajectory, "Not implemented yet..."
+                    assert not use_three_sets, "Not implemented yet..."
+
+                    descending_sort = False  # Pick examples with minimum dist
+                    typical_loss_vals = typical_stats["loss_vals"]
+                    
+                    # Convert the scores to M x N matrix where M is the number of samples in batch, and N is the typical probe examples
+                    dist_mat = torch.from_numpy(example_loss).to(device) - torch.from_numpy(typical_loss_vals).to(device)[None, :]  # M x 1 - 1 x N = M x N
+                    dist_mat = (dist_mat ** 2) ** 0.5
+                    # selection_score = dist_mat.mean(dim=1)
+                    # selection_score = dist_mat.min(dim=1)[0]  # Get the closest instance
+                    # selection_score = dist_mat.quantile(0.2, dim=1)
+                    # selection_score = dist_mat.quantile(0.5, dim=1)  # Median
+                    selection_score = dist_mat.quantile(0.25, dim=1)
+                    assert len(selection_score) == len(example_loss)
+                    
+                    print(f"Online class distance / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Min dist: {selection_score.min():.8f} / Max dist: {selection_score.max():.4f} / Mean dist: {selection_score.mean():.4f}")
+                else:
+                    if use_three_sets:
+                        corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe", model_train_mode=use_sample_norm or train_selection_mode)
+                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=use_sample_norm or train_selection_mode)
+                        probe_loss_vals = np.concatenate([typical_stats["loss_vals"], corrupted_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+                        targets = np.array([0 for _ in range(len(typical_stats["loss_vals"]))] + [1 for _ in range(len(corrupted_stats["loss_vals"]))] + [2 for _ in range(len(noisy_stats["loss_vals"]))])
+                    else:
+                        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe", model_train_mode=use_sample_norm or train_selection_mode)
+                        probe_loss_vals = np.concatenate([typical_stats["loss_vals"], noisy_stats["loss_vals"]], axis=0)[:, None]  # N x 1
+                        targets = np.array([0 for _ in range(len(typical_stats["loss_vals"]))] + [1 for _ in range(len(noisy_stats["loss_vals"]))])
+                    
+                    # Fit the kNN model to the current probe stats
+                    clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors)
+                    if use_complete_trajectory:
+                        # Add the functionality to concatenate the features
+                        ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+                        
+                        aug_probe_trajectories = np.concatenate([probe_trajectories, probe_loss_vals], axis=1)  # N x E + N x 1 = N x (E+1)
+                        print(f"Probe shapes / Probe traj: {probe_trajectories.shape} / Loss vals: {probe_loss_vals.shape} / Aug probe traj: {aug_probe_trajectories.shape}")
+                        clf.fit(aug_probe_trajectories, targets)
+                    else:
+                        clf.fit(probe_loss_vals, targets)
+                    
+                    if use_complete_trajectory:
+                        aug_ex_trajs = np.concatenate([ex_trajs, example_loss], axis=1)  # Concatenate
+                        print(f"Example shapes / Ex traj: {ex_trajs.shape} / Loss vals: {example_loss.shape} / Aug ex traj: {aug_ex_trajs.shape}")
+                        B = clf.predict_proba(aug_ex_trajs)  # 0 means typical and 1 means noisy
+                    else:
+                        B = clf.predict_proba(example_loss)  # 0 means typical and 1 means noisy
+                    assert len(B.shape) == 2 and B.shape[1] == (3 if use_three_sets else 2), B.shape
+                    B = torch.from_numpy(np.array(B)).to(device)
+                    
+                    class_scores = B.mean(dim=0)
+                    if use_only_typical_score:
+                        assert not use_three_sets, "Not implemented yet..."
+                        selection_score = B[:, 0]  # Only take the prob for being typical
+                        print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                    else:
+                        if use_three_sets:
+                            clean_score = B[:, 0] + B[:, 1] # Only take the prob for being typical
+                            atypicality_score = B[:, 1]
+                            selection_score = (clean_score + atypicality_score) / 2.
+                            print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Corrupted: {class_scores[1]:.4f} / Noisy: {class_scores[2]:.4f} / Clean score: {clean_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                        else:
+                            not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                            typicality_score = B[:, 0]  # Only take the prob for being typical
+                            selection_score = (typicality_score + not_learned_score) / 2.
+                            print(f"Online class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Sample norm: {use_sample_norm} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+            
+            else:
+                assert not use_three_sets, "Not implemented yet..." 
+                ex_trajs = np.array([train_trajectories[int(i)] for i in ex_idx])
+                if selection_batch_size is not None:  # Typical score-based sample selection
+                    assert use_probs
+                    assert isinstance(selection_batch_size, int)
+                    B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+                    assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+                    B = torch.from_numpy(np.array(B)).to(device)
+                    
+                    class_scores = B.mean(dim=0)
+                    B = B[:, 0]  # Only take the prob for being typical
+                    
+                    if use_only_typical_score:
+                        selection_score = B
+                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Selection score: {selection_score.mean():.4f}")
+                    else:
+                        # Identify examples which are already learned (compute the prob)
+                        if not train_selection_mode:
+                            model.eval()
+                        with torch.no_grad():
+                            output = model(data, return_features=False)
+                            output = F.softmax(output, dim=1)
+                            correct_class_probs = output[torch.arange(len(output)), target]
+                        typicality_score = B
+                        not_learned_score = 1. - correct_class_probs  # The higher the score, the more learned it is
+                        selection_score = (typicality_score + not_learned_score) / 2.
+                        print(f"Class scores / Mode: {'Train' if train_selection_mode else 'Eval'} / Balanced sampling: {class_balanced_sampling} / Typical: {class_scores[0]:.4f} / Noisy: {class_scores[1]:.4f} / Not learned score: {not_learned_score.mean():.4f} / Selection score: {selection_score.mean():.4f}")
+                
+                else:
+                    if use_probs:
+                        B = clf.predict_proba(ex_trajs)  # 0 means typical and 1 means noisy
+                        assert len(B.shape) == 2 and B.shape[1] == 2, B.shape
+                        B = B[:, 1]  # Only take the prob for being noisy
+                    else:
+                        B = clf.predict(ex_trajs)  # 1 means noisy
+                    B = torch.from_numpy(np.array(B)).to(device)
+                    B[B <= 1e-4] = 1e-4
+                    B[B >= 1 - 1e-4] = 1 - 1e-4
+        
+        if selection_batch_size is not None:
+            if class_balanced_sampling:
+                expected_class_samples = int(selection_batch_size // num_classes)
+                num_cls_instances = [expected_class_samples for _ in range(num_classes)]
+                while np.sum(num_cls_instances) != selection_batch_size:
+                    rand_idx = np.random.randint(0, num_classes)
+                    num_cls_instances[rand_idx] += 1
+                # print("Expected class instances:", num_cls_instances)
+                
+                balanced_selected_indices = []
+                for cls in range(num_classes):
+                    current_scores = selection_score.clone()
+                    current_scores[target != cls] = -100000. if descending_sort else 100000.
+                    selected_indices = torch.argsort(current_scores, descending=descending_sort)[:num_cls_instances[cls]]
+                    balanced_selected_indices.append(selected_indices)
+                selected_indices = torch.cat(balanced_selected_indices, dim=0)
+                
+                # for cls in range(num_classes):
+                #     mask = target[selected_indices] == cls
+                #     print(f"Cls: {cls} / # instances: {mask.sum()}", end=' | ')
+            else:
+                # Select examples with the highest probablity of being typical and lowest correct class prob
+                selected_indices = torch.argsort(selection_score, descending=descending_sort)
+                selected_indices = selected_indices[:selection_batch_size]
+            
+            data, target, ex_idx = data[selected_indices], target[selected_indices], ex_idx[selected_indices]
+
+            if output_dir is not None and batch_idx % img_save_iter == 0:
+                assert len(data) == 32
+                output_file = os.path.join(output_dir, f"ep_{epoch}_iter_{batch_idx}_batch.png")
+                print("Saving images to folder:", output_file)
+                plot(inv_transform(data) if inv_transform is not None else data, target, ex_idx, class_names, output_file=output_file)
+
+        model.train()
+        output = model(data, return_features=False)
+        output = F.log_softmax(output, dim=1)
+        pred = torch.max(output, dim=1)[1]
+
+        if selection_batch_size is None:
+            # Compute individual example losses
+            with torch.no_grad():
+                example_loss = F.nll_loss(output, target, reduction='none')
+                example_idx.append(ex_idx.clone().cpu())
+                loss_vals.append(example_loss.clone().cpu())
+
+            loss_target_vec = (1 - B) * F.nll_loss(output, target, reduction='none')
+            loss_target = torch.sum(loss_target_vec) / len(loss_target_vec)
+
+            loss_pred_vec = B * F.nll_loss(output, pred, reduction='none')
+            loss_pred = torch.sum(loss_pred_vec) / len(loss_pred_vec)
+
+            loss = loss_target + loss_pred
+
+            # loss_reg = reg_loss_class(tab_mean_class, num_classes)
+            # loss = loss + reg_term*loss_reg
+        else:
+            loss = F.nll_loss(output, target)
+
+        loss.backward()
+
+        optimizer.step()
+        ################## monitor losses  ####################################
+        loss_per_batch.append(loss.item())
+        ########################################################################
+
+        # save accuracy:
+        pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        total += len(data)
+        acc_train_per_batch.append(100. * correct / total)
+
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Accuracy: {:.0f}%, Learning rate: {:.6f}, # examples: {:d}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item(),
+                       100. * correct / total,
+                optimizer.param_groups[0]['lr'], len(data)))
+
+    update_trajectory_list = use_complete_trajectory and not (use_only_correct_class_score or use_uniform_sel)
+    if update_trajectory_list:
+        recompute_train_stats = True
+        if recompute_train_stats:  # Recompute the statistics
+            print("Recomputing training statistics...")
+            # Compute the loss values for assignment
+            # if use_sample_norm:
+            #     model.train()
+            #     set_bn_train_mode(model, track_statistics=False)
+            # else:
+            #     model.eval()
+            model.eval()
+        
+            example_idx = []
+            loss_vals = []
+            
+            for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):
+                data, target = data.to(device), target.to(device)
+                
+                # Augment the loss trajectories with the current example loss
+                with torch.no_grad():
+                    output = model(data, return_features=False)
+                    output = F.log_softmax(output, dim=1)
+                    example_loss = F.nll_loss(output, target, reduction='none').clone().cpu()
+                    example_idx.append(ex_idx.clone().cpu())
+                    loss_vals.append(example_loss)
+            # if use_sample_norm:
+            #     set_bn_train_mode(model, track_statistics=True)
+            model.train()
+        
+        example_idx = torch.cat(example_idx, dim=0).numpy().tolist()
+        loss_vals = torch.cat(loss_vals, dim=0).numpy().tolist()
+        
+        # Sort the loss list
+        sorted_loss_list = [None for _ in range(len(train_loader.dataset))]
+        for i in range(len(example_idx)):
+            assert sorted_loss_list[example_idx[i]] is None
+            sorted_loss_list[example_idx[i]] = loss_vals[i]
+        assert not any([x is None for x in sorted_loss_list])
+        
+        # Append the loss list to loss trajectory
+        if trajectory_set is None:
+            trajectory_set = dict(train=[sorted_loss_list])
+        else:
+            assert "train" in trajectory_set
+            trajectory_set["train"].append(sorted_loss_list)
+
+        typical_stats = test_tensor(model, probes["typical"], probes["typical_labels"], msg="Typical probe")
+        if use_three_sets:
+            corrupted_stats = test_tensor(model, probes["corrupted"], probes["corrupted_labels"], msg="Corrupted probe")
+            trajectory_set["corrupted"].append(corrupted_stats["loss_vals"])
+        noisy_stats = test_tensor(model, probes["noisy"], probes["noisy_labels"], msg="Noisy probe")
+        trajectory_set["typical"].append(typical_stats["loss_vals"])
+        trajectory_set["noisy"].append(noisy_stats["loss_vals"])
+
+    loss_per_epoch = [np.average(loss_per_batch)]
+    acc_train_per_epoch = [np.average(acc_train_per_batch)]
+    return (loss_per_epoch, acc_train_per_epoch, trajectory_set)
+
+
+def train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set_dep(args, model, device, train_loader, optimizer, epoch,
                                                                    reg_term, num_classes, probes, trajectory_set, use_probs,
                                                                    selection_batch_size=None):
     """
@@ -2331,7 +2698,7 @@ def train_mixUp_HardBootBeta_probes_three_sets_loss_traj(args, model, device, tr
     clf.fit(probe_trajectories, targets)
     use_upweighting = False
     
-    use_corrupted_inputs = True
+    use_corrupted_inputs = False
     corrupted_weight = 0.5
 
     for batch_idx, ((data, target), ex_idx) in enumerate(train_loader):

@@ -458,26 +458,26 @@ def main():
                 probes["typical"] = torch.stack([x[0] for x in images], dim=0)
                 probes[f"typical_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
                 
-                # # Add the remaining instances to the corrupted probe
-                # if args.use_three_set_prioritized_training:
-                #     print("Using examples from the dataset with original labels and input noise as the corrupted probe...")
-                #     indices_to_remove += [i for i in selected_indices]  # Add the typical indices
+                # Add the remaining instances to the corrupted probe
+                if args.use_three_set_prioritized_training:
+                    print("Using examples from the dataset with original labels and input noise as the corrupted probe...")
+                    indices_to_remove += [i for i in selected_indices]  # Add the typical indices
                 
-                #     num_idx_before = len(available_indices)
-                #     available_indices = [x for x in available_indices if x not in selected_indices]
-                #     print(f"Indices before: {num_idx_before} / Indices after: {len(available_indices)}")
-                #     selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
-                #     if use_val_set:
-                #         assert not use_all_val_instances_for_probe
-                #         images = [valset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
-                #     else:
-                #         images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
-                #     noise_aug = transforms.Compose([AddGaussianNoise(std=0.25), ClampRangeTransform(0., 1.)])
-                #     probes["corrupted"] = torch.stack([noise_aug(x[0]) for x in images], dim=0)
-                #     probes[f"corrupted_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
+                    num_idx_before = len(available_indices)
+                    available_indices = [x for x in available_indices if x not in selected_indices]
+                    print(f"Indices before: {num_idx_before} / Indices after: {len(available_indices)}")
+                    selected_indices = np.random.choice(available_indices, size=num_example_probes, replace=False)
+                    if use_val_set:
+                        assert not use_all_val_instances_for_probe
+                        images = [valset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
+                    else:
+                        images = [trainset_clean_transform[i] for i in selected_indices]  # Will include clean augmentations
+                    noise_aug = transforms.Compose([AddGaussianNoise(std=0.25), ClampRangeTransform(0., 1.)])
+                    probes["corrupted"] = torch.stack([noise_aug(x[0]) for x in images], dim=0)
+                    probes[f"corrupted_labels"] = torch.tensor([x[1] for x in images], dtype=torch.int64).to(device)
                 
-                #     probe_list = ["noisy", "corrupted", "typical"]
-                #     random_gen_labels = ["noisy"]  # Corrupted should have real labels
+                    probe_list = ["noisy", "corrupted", "typical"]
+                    random_gen_labels = ["noisy"]  # Corrupted should have real labels
             
             else:
                 assert not use_val_set
@@ -581,7 +581,12 @@ def main():
         for cls in range(num_classes):
             typical_instances = int((probes["typical_labels"] == cls).sum())
             noisy_instances = int((probes["noisy_labels"] == cls).sum())
-            print(f"Class: {trainset.classes[cls]} / Typical probe instances: {typical_instances} / Noisy probe instances: {noisy_instances}")
+            if "corrupted" in probes:
+                assert args.use_three_set_prioritized_training
+                corrupted_instances = int((probes["corrupted_labels"] == cls).sum())
+                print(f"Class: {trainset.classes[cls]} / Typical probe instances: {typical_instances} / Corrupted probe instances: {corrupted_instances} / Noisy probe instances: {noisy_instances}")
+            else:
+                print(f"Class: {trainset.classes[cls]} / Typical probe instances: {typical_instances} / Noisy probe instances: {noisy_instances}")
         
         for i in range(num_batches):
             output_file = os.path.join(probe_samples_path, f"typical_probes_{i+1}.png")
@@ -589,6 +594,10 @@ def main():
             
             output_file = os.path.join(probe_samples_path, f"mislabeled_probes_{i+1}.png")
             plot(inv_transform(probes["noisy"][i*bs:(i+1)*bs]), probes["noisy_labels"][i*bs:(i+1)*bs], class_names=trainset.classes, output_file=output_file, plot_rows=8)
+            
+            if "corrupted" in probes:
+                output_file = os.path.join(probe_samples_path, f"corrupted_probes_{i+1}.png")
+                plot(inv_transform(probes["corrupted"][i*bs:(i+1)*bs]), probes["corrupted_labels"][i*bs:(i+1)*bs], class_names=trainset.classes, output_file=output_file, plot_rows=8)
         print("Probe samples written to file...")
 
     for epoch in range(1, args.epochs + 1):
@@ -777,27 +786,49 @@ def main():
                                 #                                                                                         num_classes, probes, trajectory_set, not args.use_binary_prediction,
                                 #                                                                                         selection_batch_size=args.selection_batch_size)
                                 
-                                if args.loss_trajectories_path is not None and os.path.exists(args.loss_trajectories_path):
-                                    print("Loading trajectory set from file:", args.loss_trajectories_path)
-                                    with open(args.loss_trajectories_path, 'rb') as fp:
-                                        trajectory_set = pickle.load(fp)
-                                        print("Trajectories loaded successfully...")
-                                        typical_traj = np.array(trajectory_set["typical"]).transpose(1, 0)
-                                        noisy_traj = np.array(trajectory_set["noisy"]).transpose(1, 0)
-                                        train_traj = np.array(trajectory_set["train"]).transpose(1, 0)
-                                        print(f"Trajectories shape / Train: {train_traj.shape} / Typical: {typical_traj.shape} / Noisy: {noisy_traj.shape}")
+                                # Main sec
+                                # if args.loss_trajectories_path is not None and os.path.exists(args.loss_trajectories_path):
+                                #     print("Loading trajectory set from file:", args.loss_trajectories_path)
+                                #     with open(args.loss_trajectories_path, 'rb') as fp:
+                                #         trajectory_set = pickle.load(fp)
+                                #         print("Trajectories loaded successfully...")
+                                #         typical_traj = np.array(trajectory_set["typical"]).transpose(1, 0)
+                                #         noisy_traj = np.array(trajectory_set["noisy"]).transpose(1, 0)
+                                #         train_traj = np.array(trajectory_set["train"]).transpose(1, 0)
+                                #         print(f"Trajectories shape / Train: {train_traj.shape} / Typical: {typical_traj.shape} / Noisy: {noisy_traj.shape}")
                                 
-                                if len(trajectory_set["typical"]) == 0:
-                                    print("Adding fake loss values of zero...")
+                                # if len(trajectory_set["typical"]) == 0:
+                                #     print("Adding fake loss values of zero...")
+                                #     trajectory_set["typical"].append([0. for _ in range(len(probes["typical"]))])
+                                #     trajectory_set["corrupted"].append([0. for _ in range(len(probes["corrupted"]))])
+                                #     trajectory_set["noisy"].append([0. for _ in range(len(probes["noisy"]))])
+                                #     trajectory_set["train"].append([0. for _ in range(len(idx_dataset))])
+                                
+                                # print(f'\t##### Doing CE loss-based training with three-set online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+                                # _, _, trajectory_set = train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
+                                #                                                                                     num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                #                                                                                     selection_batch_size=args.selection_batch_size)
+                                
+                                replace_fake_samples = True
+                                if epoch == 1 and replace_fake_samples and probes is not None and "typical" in probes:
+                                    print("Adding fake loss values of zero instead of the actual trajectories...")
+                                    trajectory_set["typical"] = []
                                     trajectory_set["typical"].append([0. for _ in range(len(probes["typical"]))])
+                                    trajectory_set["corrupted"] = []
                                     trajectory_set["corrupted"].append([0. for _ in range(len(probes["corrupted"]))])
+                                    trajectory_set["noisy"] = []
                                     trajectory_set["noisy"].append([0. for _ in range(len(probes["noisy"]))])
+                                    trajectory_set["train"] = []
                                     trajectory_set["train"].append([0. for _ in range(len(idx_dataset))])
-                                
-                                print(f'\t##### Doing CE loss-based training with three-set online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
+
+                                batch_output_path = os.path.join(exp_path, "batch_outputs")
+                                if not os.path.exists(batch_output_path):
+                                    os.makedirs(batch_output_path)
+                                print(f'\t##### Doing CE loss-based training with three-set score-based (clean + atypical) online batch selection ({args.selection_batch_size} / {args.batch_size}) #####')
                                 _, _, trajectory_set = train_CrossEntropy_loss_traj_prioritized_typical_rho_three_set(args, model, device, idx_train_loader, optimizer, epoch, args.reg_term,
-                                                                                                                    num_classes, probes, trajectory_set, not args.use_binary_prediction,
-                                                                                                                    selection_batch_size=args.selection_batch_size)
+                                                                                    num_classes, probes, trajectory_set, not args.use_binary_prediction,
+                                                                                    selection_batch_size=args.selection_batch_size, output_dir=batch_output_path, 
+                                                                                    class_names=trainset.classes, inv_transform=inv_transform)
                             else:
                                 replace_fake_samples = True
                                 if epoch == 1 and replace_fake_samples and probes is not None and "typical" in probes:
@@ -810,7 +841,7 @@ def main():
                                     trajectory_set["noisy"].append([0. for _ in range(len(probes["noisy"]))])
                                     trajectory_set["train"] = []
                                     trajectory_set["train"].append([0. for _ in range(len(idx_dataset))])
-                                
+
                                 batch_output_path = os.path.join(exp_path, "batch_outputs")
                                 if not os.path.exists(batch_output_path):
                                     os.makedirs(batch_output_path)

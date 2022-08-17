@@ -125,7 +125,7 @@ NUM_COLORS = len(model_name_list) # len(model_types)
 if NUM_COLORS > 10:
     marker_colors = [cm(1.*i/NUM_COLORS) for i in range(NUM_COLORS)]
 else:
-    marker_colors = ["tab:green", "tab:blue", "tab:purple", "tab:orange", "tab:red", "tab:olive", "tab:gray", "tab:pink", "tab:brown", "tab:cyan"]
+    marker_colors = ["tab:green", "tab:blue", "tab:purple", "tab:orange", "tab:olive", "tab:pink", "tab:brown", "tab:cyan", "tab:red", "tab:gray"]
 
 current_iterator = 0
 for idx in range(len(model_types)):
@@ -144,6 +144,11 @@ for idx in range(len(model_types)):
     
     # line = plt.plot(epochs, accs, linewidth=4., marker=marker_list[idx % len(marker_list)],
     #                 color=marker_colors[idx], alpha=0.6, markeredgecolor='k', markersize=9, label=f"{model_types[idx]}")
+    if "uniform" in model_types[idx].lower() and "balanced" not in model_types[idx].lower():
+        print("Uniform selection found...")
+        max_acc_idx = np.argmax(accs)
+        max_point = epochs[max_acc_idx], accs[max_acc_idx]
+        plt.plot(max_point[0], max_point[1], marker='*', color='red', label=f"{model_types[idx].replace(' (Mean)', '')} (Max)", markersize=24, linewidth=0)
     line = plt.plot(epochs, accs, linewidth=4., color=marker_colors[current_iterator], alpha=0.8 if is_mean else 0.3, label=f"{model_types[idx].replace(' (Mean)', '')}")
     plt.fill_between(epochs, accs - accs_std, accs + accs_std, color=marker_colors[current_iterator], alpha=0.1)
     line[0].set_color(marker_colors[current_iterator])
